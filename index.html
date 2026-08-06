@@ -22,25 +22,12 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
-      // ===== مهم جداً: المتصفح مش بينفّذ وسوم <script> اللي جوه أي نص بنحطه عن طريق innerHTML.
-      // يعني لو مسحنا محتوى الصفحة الأصلي (تطبيق تحليل المسارات، اللي فيه آلاف الأسطر من الأكواد) واسترجعناه
-      // تاني بطريقة innerHTML، الصفحة هترجع تظهر بصرياً بس كل أكوادها هتكون واقفة تماماً (مفيش أي تفاعل).
-      // الحل الصحيح: منسيبش المحتوى الأصلي يتمسح خالص من الـ DOM من الأول. بدل كده، بنحفظ قائمة بعناصر
-      // الصفحة الأصلية ونخفيها بصرياً (display:none) واحد واحد، ونعرض فورم الدخول في طبقة (overlay) منفصلة
-      // فوقها. لما اليوزر يتأكد إنه مسموح له، بنمسح الـ overlay بس ونرجّع نظهر العناصر الأصلية زي ما هي -
-      // من غير ما نلمس محتواها أو نعيد كتابتها، فكل الأكواد والـ event listeners بتاعتها تفضل شغالة زي الأول =====
-      const originalChildren = Array.from(document.body.children);
-      function hideOriginalContent() {
-        originalChildren.forEach((el) => {
-          el.dataset.__prevDisplay = el.style.display || "";
-          el.style.display = "none";
-        });
-      }
-      function showOriginalContent() {
-        originalChildren.forEach((el) => {
-          el.style.display = el.dataset.__prevDisplay || "";
-        });
-      }
+      // ===== ملاحظة مهمة: مكتبات زي الخرائط (Leaflet) بتحسب أبعادها وقت أول ظهور ليها في الصفحة. لو
+      // خبّينا محتوى الصفحة بـ display:none وقت التحميل، المكتبات دي بتتهيأ بحجم صفر وبتفضل مكسورة حتى
+      // لو رجّعنا نظهر المحتوى تاني بعدين. عشان كده الحل هنا مختلف: بنسيب محتوى الصفحة الأصلي ظاهر
+      // وبيتحمّل طبيعي جداً (بكل أبعاده الصحيحة)، وبس بنحط طبقة (overlay) لونها صريح (solid) فوقه تماماً
+      // تغطّي الشاشة كلها لحد ما نتأكد من صلاحية اليوزر. اليوزر مش هيشوف أي حاجة تحت الـ overlay، لكن
+      // المحتوى الأصلي بيكون بيتحمّل ويتهيأ بشكل صحيح في الخلفية طول الوقت =====
       function getOverlay() {
         let overlay = document.getElementById("__auth_overlay__");
         if (!overlay) {
@@ -55,10 +42,8 @@
         const overlay = document.getElementById("__auth_overlay__");
         if (overlay) overlay.remove();
       }
-      // إخفاء المحتوى الأصلي في الأول (من غير ما نمسحه من الـ DOM)
-      hideOriginalContent();
-      // إظهار الـ body نفسه (فاضي دلوقتي لحد ما نحط فورم الدخول أو overlay فيه)
-      document.body.style.display = "block";
+      // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
+      getOverlay();
       // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
       // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
       // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
@@ -72,9 +57,8 @@
                 const userDoc = await getDoc(doc(db, "users", user.uid));
 
                 if (userDoc.exists() && userDoc.data().allowed === true) {
-                  // مسموح → نمسح أي overlay (فورم دخول أو رسالة خطأ) ونظهر المحتوى الأصلي زي ما هو
+                  // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
                   removeOverlay();
-                  showOriginalContent();
                 } else {
                   const overlay = getOverlay();
                   overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
