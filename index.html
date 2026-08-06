@@ -22,13 +22,43 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
-      // ===== مهم جداً: بنحفظ محتوى الصفحة الأصلي (تطبيق تحليل المسارات) في متغيّر قبل ما نمسحه
-      // بفورم تسجيل الدخول. من غير الحفظ ده، أي مرة اليوزر يسجل دخول بنجاح، الكود كان بيحاول
-      // "يظهر" الـ body بس الـ body يكون فاضي من المحتوى الأصلي (لأنه اتمسح زمان بفورم الدخول)،
-      // فتفضل الصفحة عارضة فورم الدخول تاني وكأن مفيش حاجة حصلت =====
-      const originalBodyHTML = document.body.innerHTML;
-      // إخفاء المحتوى الأصلي في الأول
-      document.body.style.display = "none";
+      // ===== مهم جداً: المتصفح مش بينفّذ وسوم <script> اللي جوه أي نص بنحطه عن طريق innerHTML.
+      // يعني لو مسحنا محتوى الصفحة الأصلي (تطبيق تحليل المسارات، اللي فيه آلاف الأسطر من الأكواد) واسترجعناه
+      // تاني بطريقة innerHTML، الصفحة هترجع تظهر بصرياً بس كل أكوادها هتكون واقفة تماماً (مفيش أي تفاعل).
+      // الحل الصحيح: منسيبش المحتوى الأصلي يتمسح خالص من الـ DOM من الأول. بدل كده، بنحفظ قائمة بعناصر
+      // الصفحة الأصلية ونخفيها بصرياً (display:none) واحد واحد، ونعرض فورم الدخول في طبقة (overlay) منفصلة
+      // فوقها. لما اليوزر يتأكد إنه مسموح له، بنمسح الـ overlay بس ونرجّع نظهر العناصر الأصلية زي ما هي -
+      // من غير ما نلمس محتواها أو نعيد كتابتها، فكل الأكواد والـ event listeners بتاعتها تفضل شغالة زي الأول =====
+      const originalChildren = Array.from(document.body.children);
+      function hideOriginalContent() {
+        originalChildren.forEach((el) => {
+          el.dataset.__prevDisplay = el.style.display || "";
+          el.style.display = "none";
+        });
+      }
+      function showOriginalContent() {
+        originalChildren.forEach((el) => {
+          el.style.display = el.dataset.__prevDisplay || "";
+        });
+      }
+      function getOverlay() {
+        let overlay = document.getElementById("__auth_overlay__");
+        if (!overlay) {
+          overlay = document.createElement("div");
+          overlay.id = "__auth_overlay__";
+          overlay.style.cssText = "position:fixed;inset:0;background:#fff;z-index:999999;overflow:auto;";
+          document.body.appendChild(overlay);
+        }
+        return overlay;
+      }
+      function removeOverlay() {
+        const overlay = document.getElementById("__auth_overlay__");
+        if (overlay) overlay.remove();
+      }
+      // إخفاء المحتوى الأصلي في الأول (من غير ما نمسحه من الـ DOM)
+      hideOriginalContent();
+      // إظهار الـ body نفسه (فاضي دلوقتي لحد ما نحط فورم الدخول أو overlay فيه)
+      document.body.style.display = "block";
       // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
       // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
       // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
@@ -42,18 +72,18 @@
                 const userDoc = await getDoc(doc(db, "users", user.uid));
 
                 if (userDoc.exists() && userDoc.data().allowed === true) {
-                  // مسموح → نرجّع محتوى الصفحة الأصلي (اللي كان محفوظ) ونعرضه
-                  document.body.innerHTML = originalBodyHTML;
-                  document.body.style.display = "block";
+                  // مسموح → نمسح أي overlay (فورم دخول أو رسالة خطأ) ونظهر المحتوى الأصلي زي ما هو
+                  removeOverlay();
+                  showOriginalContent();
                 } else {
-                  document.body.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
-                  document.body.style.display = "block";
+                  const overlay = getOverlay();
+                  overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
                 }
               } catch (err) {
                 // فشل التحقق (مشكلة اتصال أو صلاحيات Firestore) → نعرض رسالة واضحة بدل صفحة فاضية
                 console.error("Firestore permission check error:", err);
-                document.body.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p><p style='color:#999;font-size:13px;'>تفاصيل تقنية: " + (err && err.code ? err.code : (err && err.message ? err.message : String(err))) + "</p></div>";
-                document.body.style.display = "block";
+                const overlay = getOverlay();
+                overlay.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p><p style='color:#999;font-size:13px;'>تفاصيل تقنية: " + (err && err.code ? err.code : (err && err.message ? err.message : String(err))) + "</p></div>";
               }
             } else {
               // مش مسجل دخول → يعرض فورم الدخول
@@ -63,7 +93,8 @@
         });
       });
       function showLoginForm() {
-        document.body.innerHTML = `
+        const overlay = getOverlay();
+        overlay.innerHTML = `
           <div style="max-width:400px;margin:100px auto;font-family:Arial;text-align:center;">
             <h2>تسجيل الدخول</h2>
             <input type="email" id="email" placeholder="الإيميل" style="width:100%;padding:12px;margin:8px 0;box-sizing:border-box;">
@@ -72,7 +103,6 @@
             <p id="error" style="color:red;"></p>
           </div>
         `;
-        document.body.style.display = "block";
       }
       window.login = async () => {
         const email = document.getElementById("email").value;
