@@ -45,7 +45,8 @@
                 }
               } catch (err) {
                 // فشل التحقق (مشكلة اتصال أو صلاحيات Firestore) → نعرض رسالة واضحة بدل صفحة فاضية
-                document.body.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p></div>";
+                console.error("Firestore permission check error:", err);
+                document.body.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p><p style='color:#999;font-size:13px;'>تفاصيل تقنية: " + (err && err.code ? err.code : (err && err.message ? err.message : String(err))) + "</p></div>";
                 document.body.style.display = "block";
               }
             } else {
@@ -73,7 +74,19 @@
         try {
           await signInWithEmailAndPassword(auth, email, password);
         } catch (err) {
-          document.getElementById("error").textContent = "خطأ في الإيميل أو كلمة المرور";
+          // نطبع الخطأ الكامل في الـ Console ونوريه على الشاشة كمان عشان تعرف السبب الحقيقي
+          // (مثلاً: auth/unauthorized-domain, auth/invalid-credential, auth/user-not-found ...)
+          console.error("Login error:", err);
+          const code = err && err.code ? err.code : "unknown-error";
+          let msg = "خطأ في الإيميل أو كلمة المرور";
+          if (code === "auth/unauthorized-domain") {
+            msg = "هذا الدومين غير مصرّح له بتسجيل الدخول (أضِفه في Firebase Console > Authentication > Settings > Authorized domains)";
+          } else if (code === "auth/network-request-failed") {
+            msg = "فشل الاتصال بالشبكة - تحقق من الإنترنت";
+          } else if (code === "auth/too-many-requests") {
+            msg = "محاولات كثيرة جداً، حاول لاحقاً";
+          }
+          document.getElementById("error").textContent = msg + " (" + code + ")";
         }
       };
     </script>
