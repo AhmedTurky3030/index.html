@@ -22,6 +22,11 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
+      // ===== مهم جداً: بنحفظ محتوى الصفحة الأصلي (تطبيق تحليل المسارات) في متغيّر قبل ما نمسحه
+      // بفورم تسجيل الدخول. من غير الحفظ ده، أي مرة اليوزر يسجل دخول بنجاح، الكود كان بيحاول
+      // "يظهر" الـ body بس الـ body يكون فاضي من المحتوى الأصلي (لأنه اتمسح زمان بفورم الدخول)،
+      // فتفضل الصفحة عارضة فورم الدخول تاني وكأن مفيش حاجة حصلت =====
+      const originalBodyHTML = document.body.innerHTML;
       // إخفاء المحتوى الأصلي في الأول
       document.body.style.display = "none";
       // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
@@ -37,7 +42,8 @@
                 const userDoc = await getDoc(doc(db, "users", user.uid));
 
                 if (userDoc.exists() && userDoc.data().allowed === true) {
-                  // مسموح → يظهر المحتوى
+                  // مسموح → نرجّع محتوى الصفحة الأصلي (اللي كان محفوظ) ونعرضه
+                  document.body.innerHTML = originalBodyHTML;
                   document.body.style.display = "block";
                 } else {
                   document.body.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
