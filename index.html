@@ -8,7 +8,7 @@
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
       import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
-      import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+      import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, getDocs, query, orderBy, limit, increment, updateDoc } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
       // ←←← حط بيانات مشروعك هنا
       const firebaseConfig = {
         apiKey: "AIzaSyAw_jhByWs2zbpA-v32yckGj_AGQ0Z5_ws",
@@ -44,6 +44,79 @@
       }
       // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
       getOverlay();
+
+      // ===== توليد معرف ثابت للجهاز (Device ID): بيتخزن في localStorage (مش متأثر بإجبار تسجيل الخروج
+      // اللي بيحصل تحت)، فيفضل نفس المعرف لنفس الجهاز حتى لو المستخدم قفل المتصفح وفتحه تاني. ده بيسمحلنا
+      // نحسب "كام جهاز مختلف" بيستخدم كل حساب =====
+      function getDeviceId() {
+        let id = localStorage.getItem("__device_id__");
+        if (!id) {
+          const raw = navigator.userAgent + "|" + navigator.platform + "|" + screen.width + "x" + screen.height + "|" + Math.random();
+          let hash = 0;
+          for (let i = 0; i < raw.length; i++) { hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0; }
+          id = "dev_" + Math.abs(hash).toString(36) + "_" + Date.now().toString(36);
+          localStorage.setItem("__device_id__", id);
+        }
+        return id;
+      }
+
+      // ===== تسجيل عملية الدخول: بيتسجل سجل عام في login_logs (لكل الأحداث) + بيتحدّث مستند الجهاز
+      // تحت users/{uid}/devices/{deviceId} (لحساب عدد الأجهزة وآخر ظهور لكل جهاز) =====
+      async function logLoginEvent(user, deviceId) {
+        let ip = null;
+        try {
+          const res = await fetch("https://api.ipify.org?format=json");
+          const data = await res.json();
+          ip = data.ip || null;
+        } catch (e) { /* تجاهل: مش مشكلة لو فشل جلب الـ IP */ }
+
+        try {
+          await addDoc(collection(db, "login_logs"), {
+            uid: user.uid,
+            email: user.email,
+            deviceId,
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            screen: screen.width + "x" + screen.height,
+            ip,
+            timestamp: serverTimestamp()
+          });
+        } catch (e) { console.error("logLoginEvent error:", e); }
+
+        try {
+          const deviceRef = doc(db, "users", user.uid, "devices", deviceId);
+          const deviceSnap = await getDoc(deviceRef);
+          if (deviceSnap.exists()) {
+            await updateDoc(deviceRef, { lastSeen: serverTimestamp(), loginCount: increment(1) });
+          } else {
+            await setDoc(deviceRef, {
+              deviceId,
+              userAgent: navigator.userAgent,
+              platform: navigator.platform,
+              screen: screen.width + "x" + screen.height,
+              firstSeen: serverTimestamp(),
+              lastSeen: serverTimestamp(),
+              loginCount: 1
+            });
+          }
+        } catch (e) { console.error("device log error:", e); }
+      }
+
+      // ===== التحقق من عدد الأجهزة المسموح بيها لكل حساب: لو الأدمن حاطط قيمة maxDevices على مستند
+      // المستخدم (users/{uid}) بيتم رفض أي جهاز جديد يتخطى الحد، أما لو مفيش حد محدد فمفيش قيود =====
+      async function checkDeviceLimit(user, deviceId, maxDevices) {
+        if (!maxDevices || maxDevices <= 0) return true;
+        try {
+          const devicesSnap = await getDocs(collection(db, "users", user.uid, "devices"));
+          const existingIds = devicesSnap.docs.map(d => d.id);
+          if (existingIds.includes(deviceId)) return true;
+          return devicesSnap.size < maxDevices;
+        } catch (e) {
+          console.error("checkDeviceLimit error:", e);
+          return true;
+        }
+      }
+
       // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
       // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
       // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
@@ -57,8 +130,21 @@
                 const userDoc = await getDoc(doc(db, "users", user.uid));
 
                 if (userDoc.exists() && userDoc.data().allowed === true) {
+                  const userData = userDoc.data();
+                  const deviceId = getDeviceId();
+                  const allowedDevice = await checkDeviceLimit(user, deviceId, userData.maxDevices);
+                  if (!allowedDevice) {
+                    await signOut(auth);
+                    const overlay = getOverlay();
+                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تجاوزت عدد الأجهزة المسموح بها لهذا الحساب (" + userData.maxDevices + " جهاز). تواصل مع مسؤول النظام.</h2>";
+                    return;
+                  }
                   // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
+                  logLoginEvent(user, deviceId);
                   removeOverlay();
+                  if (userData.isAdmin === true) {
+                    addAdminButton();
+                  }
                 } else {
                   const overlay = getOverlay();
                   overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
@@ -109,6 +195,73 @@
           document.getElementById("error").textContent = msg + " (" + code + ")";
         }
       };
+
+      // ===== لوحة مراقبة الأدمن: زرار عائم بيظهر بس للمستخدم اللي مستنده في users/{uid} فيه isAdmin === true.
+      // اللوحة بتعرض: كل المستخدمين وعدد أجهزتهم والحد الأقصى المسموح، وآخر 50 عملية دخول في النظام كله =====
+      function addAdminButton() {
+        if (document.getElementById("__admin_btn__")) return;
+        const btn = document.createElement("button");
+        btn.id = "__admin_btn__";
+        btn.textContent = "📊 لوحة المراقبة";
+        btn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:999998;padding:12px 18px;background:#667eea;color:#fff;border:none;border-radius:30px;box-shadow:0 4px 12px rgba(0,0,0,0.25);cursor:pointer;font-family:Arial;font-weight:bold;";
+        btn.onclick = () => openAdminPanel();
+        document.body.appendChild(btn);
+      }
+
+      async function openAdminPanel() {
+        if (document.getElementById("__admin_modal__")) return;
+        const modal = document.createElement("div");
+        modal.id = "__admin_modal__";
+        modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;";
+        modal.innerHTML = `
+          <div style="background:#fff;max-width:900px;width:100%;max-height:85vh;overflow:auto;border-radius:12px;padding:24px;font-family:Arial;direction:rtl;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+              <h2 style="margin:0;">لوحة المراقبة</h2>
+              <button id="__close_admin__" style="background:#dc3545;color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer;">إغلاق</button>
+            </div>
+            <div id="__admin_content__">جاري التحميل...</div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+        document.getElementById("__close_admin__").onclick = () => modal.remove();
+
+        const content = document.getElementById("__admin_content__");
+        try {
+          const usersSnap = await getDocs(collection(db, "users"));
+          let usersHtml = "<h3>المستخدمون</h3><table style='width:100%;border-collapse:collapse;margin-bottom:24px;font-size:14px;'><tr style='background:#f0f0f0;'><th style='padding:8px;border:1px solid #ddd;'>الإيميل</th><th style='padding:8px;border:1px solid #ddd;'>مسموح؟</th><th style='padding:8px;border:1px solid #ddd;'>عدد الأجهزة</th><th style='padding:8px;border:1px solid #ddd;'>الحد الأقصى</th></tr>";
+          for (const uDoc of usersSnap.docs) {
+            const u = uDoc.data();
+            const devicesSnap = await getDocs(collection(db, "users", uDoc.id, "devices"));
+            usersHtml += "<tr>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + (u.email || uDoc.id) + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + (u.allowed ? "✅" : "❌") + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + devicesSnap.size + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + (u.maxDevices || "بدون حد") + "</td>"
+              + "</tr>";
+          }
+          usersHtml += "</table>";
+
+          const logsSnap = await getDocs(query(collection(db, "login_logs"), orderBy("timestamp", "desc"), limit(50)));
+          let logsHtml = "<h3>آخر 50 عملية دخول</h3><table style='width:100%;border-collapse:collapse;font-size:14px;'><tr style='background:#f0f0f0;'><th style='padding:8px;border:1px solid #ddd;'>الإيميل</th><th style='padding:8px;border:1px solid #ddd;'>الوقت</th><th style='padding:8px;border:1px solid #ddd;'>الجهاز</th><th style='padding:8px;border:1px solid #ddd;'>IP</th></tr>";
+          logsSnap.forEach(d => {
+            const l = d.data();
+            const time = l.timestamp && l.timestamp.toDate ? l.timestamp.toDate().toLocaleString("ar-EG") : "-";
+            logsHtml += "<tr>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + (l.email || l.uid) + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + time + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;font-size:12px;'>" + ((l.platform || "") + " - " + (l.screen || "")) + "</td>"
+              + "<td style='padding:8px;border:1px solid #ddd;'>" + (l.ip || "-") + "</td>"
+              + "</tr>";
+          });
+          logsHtml += "</table>";
+
+          content.innerHTML = usersHtml + logsHtml;
+        } catch (e) {
+          console.error("openAdminPanel error:", e);
+          content.innerHTML = "<p style='color:red;'>حدث خطأ أثناء تحميل بيانات لوحة المراقبة. تحقق من صلاحيات Firestore Rules الخاصة بالأدمن (لازم قاعدة تسمح لصاحب isAdmin=true بقراءة users و login_logs بالكامل).</p>";
+        }
+      }
+      window.openAdminPanel = openAdminPanel;
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
