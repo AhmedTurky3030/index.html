@@ -22,6 +22,10 @@
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
       const db = getFirestore(app);
+      // ===== إعدادات "متصل الآن": المستخدم يُعتبر متصلاً لو وصلت نبضة (heartbeat) منه خلال آخر دقيقتين،
+      // والنبضة نفسها بترسل كل 45 ثانية طول ما الصفحة مفتوحة عنده وهو مسجل دخول =====
+      const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
+      const HEARTBEAT_INTERVAL_MS = 45 * 1000;
       // ===== ملاحظة مهمة: مكتبات زي الخرائط (Leaflet) بتحسب أبعادها وقت أول ظهور ليها في الصفحة. لو
       // خبّينا محتوى الصفحة بـ display:none وقت التحميل، المكتبات دي بتتهيأ بحجم صفر وبتفضل مكسورة حتى
       // لو رجّعنا نظهر المحتوى تاني بعدين. عشان كده الحل هنا مختلف: بنسيب محتوى الصفحة الأصلي ظاهر
@@ -130,6 +134,25 @@
         }
       }
 
+      // ===== نبضة دورية (heartbeat): بترسل توقيت "الآن" كل فترة ثابتة طول ما الصفحة مفتوحة وواضحة على
+      // الشاشة، سواء على مستوى الحساب كله (users/{uid}.lastActive) أو على مستوى الجهاز نفسه
+      // (users/{uid}/devices/{deviceId}.lastActive). لوحة المراقبة بتقارن آخر نبضة بالوقت الحالي عشان
+      // تحدد "متصل الآن" ولا "غير متصل"، وكمان تعرض توقيت آخر اتصال فعلي =====
+      let __heartbeatTimer = null;
+      function startHeartbeat(user, deviceId) {
+        if (__heartbeatTimer) clearInterval(__heartbeatTimer);
+        const beat = async () => {
+          if (document.visibilityState === "hidden") return;
+          try {
+            await setDoc(doc(db, "users", user.uid), { lastActive: serverTimestamp() }, { merge: true });
+            await setDoc(doc(db, "users", user.uid, "devices", deviceId), { lastActive: serverTimestamp() }, { merge: true });
+          } catch (e) { console.error("heartbeat error:", e); }
+        };
+        beat();
+        __heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
+      }
+
       // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
       // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
       // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
@@ -154,6 +177,7 @@
                   }
                   // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
                   logLoginEvent(user, deviceId);
+                  startHeartbeat(user, deviceId);
                   removeOverlay();
                   if (userData.isAdmin === true) {
                     addAdminButton();
@@ -263,6 +287,10 @@
           #__admin_modal__ .ap-badge.no { background:#fdeaea; color:#e5484d; }
           #__admin_modal__ .ap-badge.admin { background:#efe9fc; color:#764ba2; }
           #__admin_modal__ .ap-badge.warn { background:#fff3e0; color:#c2650a; }
+          #__admin_modal__ .ap-allow-toggle { border:none; border-radius:20px; padding:4px 12px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; font-family:inherit; }
+          #__admin_modal__ .ap-allow-toggle.ap-allow-on { background:#e7f8ef; color:#1a9d5c; }
+          #__admin_modal__ .ap-allow-toggle.ap-allow-off { background:#fdeaea; color:#e5484d; }
+          #__admin_modal__ .ap-allow-toggle:disabled { opacity:0.6; cursor:wait; }
           #__admin_modal__ .ap-empty { text-align:center; color:#aaa; padding:30px; }
           #__admin_modal__ .ap-loading { text-align:center; color:#8a8aa3; padding:40px; }
           #__admin_modal__ .ap-nickname { border:1px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; width:120px; }
@@ -352,6 +380,8 @@
             const devicesSnap = await getDocs(collection(db, "users", uDoc.id, "devices"));
             const devices = devicesSnap.docs.map(dd => {
               const dv = dd.data();
+              const lastActiveMs = dv.lastActive && dv.lastActive.toDate ? dv.lastActive.toDate().getTime()
+                : (dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().getTime() : 0);
               return {
                 id: dd.id,
                 userAgent: dv.userAgent || "-",
@@ -359,9 +389,15 @@
                 screen: dv.screen || "-",
                 lastSeen: dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().toLocaleString("ar-EG") : "-",
                 firstSeen: dv.firstSeen && dv.firstSeen.toDate ? dv.firstSeen.toDate().toLocaleString("ar-EG") : "-",
-                loginCount: dv.loginCount || 1
+                loginCount: dv.loginCount || 1,
+                lastActiveMs
               };
             });
+            // آخر نشاط للحساب ككل = الأحدث بين نبضة الحساب نفسه ونبضات كل أجهزته (تحسّبًا لحسابات
+            // سجّلت دخول قبل إضافة نظام النبضة، بيتم الاعتماد على آخر ظهور جهاز مسجّل بدلاً منها)
+            const topLevelActiveMs = u.lastActive && u.lastActive.toDate ? u.lastActive.toDate().getTime() : 0;
+            const deviceMaxActiveMs = devices.reduce((m, d) => Math.max(m, d.lastActiveMs || 0), 0);
+            const lastActiveMs = Math.max(topLevelActiveMs, deviceMaxActiveMs);
             users.push({
               id: uDoc.id,
               email: u.email || uDoc.id,
@@ -369,7 +405,9 @@
               allowed: !!u.allowed,
               isAdmin: !!u.isAdmin,
               devices,
-              maxDevices: u.maxDevices || null
+              maxDevices: u.maxDevices || null,
+              lastActiveMs,
+              online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS
             });
           }
           __adminUsersCache = users;
@@ -425,19 +463,28 @@
           // ---- تنبيه استخدام نفس الحساب على أكثر من جهاز ----
           const multiDeviceUsers = users.filter(u => u.devices.length > 1);
 
+          // ---- تنبيه فتح نفس الحساب من نوع جهاز مختلف (نظام/منصة مختلفة عن باقي أجهزته المسجّلة) ----
+          const deviceTypeMismatchUsers = users
+            .map(u => ({ u, platforms: [...new Set(u.devices.map(d => d.platform).filter(p => p && p !== "-"))] }))
+            .filter(x => x.platforms.length > 1);
+
           const totalUsers = users.length;
           const allowedCount = users.filter(u => u.allowed).length;
           const adminCount = users.filter(u => u.isAdmin).length;
           const totalDevices = users.reduce((s, u) => s + u.devices.length, 0);
+          const onlineCount = users.filter(u => u.online).length;
 
           let alertsHtml = "";
-          if (failureAlerts.length || multiDeviceUsers.length) {
+          if (failureAlerts.length || multiDeviceUsers.length || deviceTypeMismatchUsers.length) {
             alertsHtml += `<div class="ap-alerts">`;
             failureAlerts.forEach(a => {
               alertsHtml += `<div class="ap-alert danger">⚠️ <div><b>محاولات دخول فاشلة مشبوهة</b>الحساب <b>${a.email}</b> فشل الدخول به ${a.count} مرة خلال آخر 24 ساعة — قد تكون محاولة اختراق.</div></div>`;
             });
             multiDeviceUsers.forEach(u => {
               alertsHtml += `<div class="ap-alert">📱 <div><b>استخدام متعدد الأجهزة</b>الحساب <b>${u.nickname || u.email}</b> مسجّل دخول من ${u.devices.length} أجهزة مختلفة.</div></div>`;
+            });
+            deviceTypeMismatchUsers.forEach(({ u, platforms }) => {
+              alertsHtml += `<div class="ap-alert danger">🖥️ <div><b>تسجيل دخول من نوع جهاز مختلف</b>الحساب <b>${u.nickname || u.email}</b> تم فتحه من أنواع أجهزة مختلفة (${platforms.join(" / ")}) — تأكد إن ده فعلاً نفس صاحب الحساب.</div></div>`;
             });
             alertsHtml += `</div>`;
           }
@@ -446,6 +493,7 @@
           content.innerHTML = `
             <div class="ap-stats">
               <div class="ap-stat"><b>${totalUsers}</b><span>إجمالي المستخدمين</span></div>
+              <div class="ap-stat"><b>${onlineCount}</b><span>🟢 متصل الآن</span></div>
               <div class="ap-stat"><b>${allowedCount}</b><span>لهم صلاحية دخول</span></div>
               <div class="ap-stat"><b>${adminCount}</b><span>أدمن</span></div>
               <div class="ap-stat"><b>${totalDevices}</b><span>إجمالي الأجهزة</span></div>
@@ -460,7 +508,7 @@
               <input type="text" id="__user_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
               <div style="overflow:auto;max-height:44vh;">
                 <table>
-                  <thead><tr><th>الاسم</th><th>الإيميل</th><th>الصلاحية</th><th>النوع</th><th>الأجهزة</th><th>الحد الأقصى</th><th></th></tr></thead>
+                  <thead><tr><th>الاسم</th><th>الإيميل</th><th>الحالة</th><th>الصلاحية</th><th>النوع</th><th>الأجهزة</th><th>الحد الأقصى</th><th></th></tr></thead>
                   <tbody id="__users_tbody__"></tbody>
                 </table>
               </div>
@@ -490,23 +538,31 @@
               !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
             );
             if (rows.length === 0) {
-              tbody.innerHTML = `<tr><td colspan="7" class="ap-empty">لا يوجد نتائج</td></tr>`;
+              tbody.innerHTML = `<tr><td colspan="8" class="ap-empty">لا يوجد نتائج</td></tr>`;
               return;
             }
-            tbody.innerHTML = rows.map(u => `
+            tbody.innerHTML = rows.map(u => {
+              const statusBadge = u.online
+                ? '<span class="ap-badge ok">🟢 متصل الآن</span>'
+                : '<span class="ap-badge no">⚪ غير متصل</span>';
+              const lastSeenText = u.lastActiveMs
+                ? new Date(u.lastActiveMs).toLocaleString("ar-EG")
+                : "لم يسجّل دخول بعد";
+              return `
               <tr>
                 <td><input class="ap-nickname" data-uid="${u.id}" value="${(u.nickname || '').replace(/"/g,'&quot;')}" placeholder="بدون اسم"></td>
                 <td>${u.email}</td>
-                <td>${u.allowed ? '<span class="ap-badge ok">✅ مسموح</span>' : '<span class="ap-badge no">❌ ممنوع</span>'}</td>
+                <td>${statusBadge}<div style="font-size:11px;color:#8a8aa3;margin-top:3px;">${lastSeenText}</div></td>
+                <td><button class="ap-allow-toggle ${u.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${u.id}" data-allowed="${u.allowed ? '1' : '0'}">${u.allowed ? '✅ مسموح' : '❌ ممنوع'}</button></td>
                 <td>${u.isAdmin ? '<span class="ap-badge admin">أدمن</span>' : 'مستخدم'}</td>
                 <td>${u.devices.length}${u.devices.length > 1 ? ' <span class="ap-badge warn">⚠️ متعدد</span>' : ''}</td>
                 <td><input type="number" min="0" class="ap-maxdev" data-uid="${u.id}" value="${u.maxDevices || ''}" placeholder="∞"></td>
                 <td><button class="ap-detailsbtn" data-uid="${u.id}">الأجهزة ▾</button></td>
               </tr>
               <tr class="ap-devrow" id="__devrow_${u.id}__" style="display:none;">
-                <td colspan="7">${renderDeviceDetails(u.devices)}</td>
+                <td colspan="8">${renderDeviceDetails(u.devices)}</td>
               </tr>
-            `).join("");
+            `; }).join("");
 
             // حفظ الاسم المُعرّف عند فقد التركيز
             tbody.querySelectorAll(".ap-nickname").forEach(inp => {
@@ -539,6 +595,31 @@
               });
             });
 
+            // تبديل صلاحية الوصول للصفحة (مسموح / ممنوع) بضغطة واحدة
+            tbody.querySelectorAll(".ap-allow-toggle").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const target = e.currentTarget;
+                const uid = target.dataset.uid;
+                const next = target.dataset.allowed !== "1";
+                target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid), { allowed: next });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.allowed = next;
+                  target.dataset.allowed = next ? "1" : "0";
+                  target.textContent = next ? "✅ مسموح" : "❌ ممنوع";
+                  target.className = "ap-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
+                  const allowedStat = document.querySelector("#__admin_modal__ .ap-stats .ap-stat:nth-child(3) b");
+                  if (allowedStat) allowedStat.textContent = __adminUsersCache.filter(x => x.allowed).length;
+                } catch (err) {
+                  console.error("toggle allowed error:", err);
+                  alert("تعذّر تغيير الصلاحية — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على مستندات users)");
+                } finally {
+                  target.disabled = false;
+                }
+              });
+            });
+
             // إظهار/إخفاء تفاصيل الأجهزة
             tbody.querySelectorAll(".ap-detailsbtn").forEach(btn => {
               btn.addEventListener("click", (e) => {
@@ -551,9 +632,11 @@
 
           function renderDeviceDetails(devices) {
             if (!devices.length) return `<div class="ap-empty" style="padding:14px;">لا توجد أجهزة مسجّلة لهذا المستخدم</div>`;
-            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
+            const nowMs = Date.now();
+            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>الحالة</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
             devices.forEach(d => {
-              html += `<tr><td style="font-size:11px;">${d.id}</td><td>${d.platform}</td><td>${d.screen}</td><td>${d.firstSeen}</td><td>${d.lastSeen}</td><td>${d.loginCount}</td></tr>`;
+              const online = d.lastActiveMs > 0 && (nowMs - d.lastActiveMs) < ONLINE_THRESHOLD_MS;
+              html += `<tr><td style="font-size:11px;">${d.id}</td><td>${d.platform}</td><td>${d.screen}</td><td>${online ? '🟢 متصل' : '⚪ غير متصل'}</td><td>${d.firstSeen}</td><td>${d.lastSeen}</td><td>${d.loginCount}</td></tr>`;
             });
             html += `</tbody></table>`;
             return html;
@@ -4248,21 +4331,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                      المركبة/المندوب أعلاه، بدلاً من وجود فلتر أيام منفصل داخل كل بطاقة على حدة -->
                 <div class="weekday-filter-bar" id="weekdayFilterBar" style="display:none;">
                     <label style="min-width:auto;">📅 فلترة حسب اليوم (اختيار متعدد):</label>
-                    <label class="weekday-mode-toggle" style="min-width:auto;" title="فعّل هذا الخيار لعرض كل تواريخ نفس اليوم (مثلاً كل أيام السبت) في حالة رفع بيانات لأكثر من أسبوع/شهر">
-                        <input type="checkbox" id="weekdayMonthModeToggle" onchange="toggleWeekdayMonthMode()">
-                        <span>📆 عرض شهر (كل الأسابيع)</span>
-                    </label>
+                    <!-- ===== تم حذف تشيك بوكس "عرض شهر (كل الأسابيع)" وتقويم اختيار الفترة (من - إلى) بناءً على طلب
+                         المستخدم. الفلتر الآن يعرض دائماً مربعاً منفصلاً لكل يوم+تاريخ فعلي مرفوع (بجانب بعضه أفقياً)
+                         بغض النظر عن عدد الأيام أو الأسابيع المرفوعة، والاختيار/الإلغاء بينها يتحكم مباشرة فيما يظهر
+                         على كل البطاقات (بما فيها الخريطة) - راجع populateGlobalFilters/toggleDayDateChip ===== -->
                     <div class="weekday-chips" id="weekdayChips"></div>
-                    <!-- ===== تقويم اختيار الفترة (نفس أسلوب حقول التاريخ في "مقارنة حرارية بين فترتين") - يظهر بدل
-                         مربعات أسماء الأيام فقط عند تفعيل تشيك بوكس "عرض شهر (كل الأسابيع)"، لأنه أسهل في تحديد/اختيار
-                         الأيام المطلوبة من عدة أسابيع دفعة واحدة عن الاختيار بالاسم فقط ===== -->
-                    <div class="weekday-daterange-picker" id="weekdayDateRangePicker" style="display:none;">
-                        <input type="date" id="weekdayDateRangeFrom" title="من تاريخ">
-                        <span style="font-size:12px;color:#6c757d;">إلى</span>
-                        <input type="date" id="weekdayDateRangeTo" title="إلى تاريخ">
-                        <button type="button" class="filter-reset" id="weekdayDateRangeApplyBtn" onclick="applyWeekdayDateRange()">📅 تطبيق</button>
-                        <button type="button" class="filter-reset" id="weekdayDateRangeResetBtn" onclick="clearWeekdayDateRange()">إعادة تعيين</button>
-                    </div>
                     <button type="button" class="filter-reset" id="weekdaySelectAllBtn">تحديد الكل</button>
                     <button type="button" class="filter-reset" id="weekdayClearBtn">مسح التحديد</button>
                     <!-- ===== زر "طباعة العملاء المهملين" الخاص بشاشة نتائج السيارة: وظيفة مستقلة تماماً عن
@@ -4760,23 +4833,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         let stopVisitDetails = {};
 
         // ===== فلاتر عامة تتفاعل معها كل الخانات (المركبة/المندوب + أيام الأسبوع) =====
-        let activeWeekdays = new Set(); // فاضية = كل الأيام
-        // خريطة "اسم اليوم" -> "التاريخ الفعلي" (سنة-شهر-يوم) لليوم المطابق ضمن الأيام المرفوعة حالياً - تُستخدم لمطابقة
-        // الفواتير بالتاريخ الفعلي المحدد وليس فقط باسم اليوم (لأن "الاثنين" مثلاً يتكرر كل أسبوع بتاريخ مختلف)
-        let weekdayToDateKeyMap = {};
-        // فاضية = وضع "أسبوع" الافتراضي (يعرض تاريخ واحد فقط لكل يوم، بدون أي تغيير عن السلوك القديم)
-        // true = وضع "شهر" (يعرض كل تواريخ نفس اليوم مجمّعة تحت بعضها داخل نفس المربع، ويوسّع الفلترة لتشملها كلها)
-        let weekdayMonthMode = false;
-        // خريطة "اسم اليوم" -> مصفوفة بكل تواريخه الفعلية عبر كل الملفات المرفوعة (تُبنى في populateGlobalFilters)
-        let weekdayAllDatesMap = {};
-        // ===== وضع اختيار التواريخ عبر تقويم (نفس أسلوب حقول التاريخ المستخدمة في "مقارنة حرارية بين فترتين")
-        // بدلاً من الاعتماد فقط على مربعات أسماء الأيام - يظهر فقط عند تفعيل "عرض شهر (كل الأسابيع)" =====
-        let weekdayDateRangeActive = false; // true = المستخدم حدد فترة تاريخ محددة عبر التقويم بدل مربعات الأيام
-        let weekdayDateRangeKeys = new Set(); // كل مفاتيح التواريخ (yyyy-mm-dd) الواقعة داخل الفترة المحددة
-        // أقدم/أحدث تاريخ موجود فعلياً في البيانات المرفوعة (yyyy-mm-dd) - تُستخدم لضبط min/max لحقلي التقويم
-        // حتى لا يختار المستخدم بالغلط سنة مختلفة عن سنة البيانات الفعلية فيظهر "لا توجد أيام" رغم وجودها
-        let weekdayDataMinDateKey = null;
-        let weekdayDataMaxDateKey = null;
+        // ===== فلتر "اليوم" أصبح يعمل مباشرة على التاريخ الفعلي لكل يوم مرفوع (وليس على اسم اليوم فقط)،
+        // بحيث كل يوم+تاريخ مرفوع يظهر كمربع منفصل بجانب بقية المربعات، أياً كان عدد الأيام/الأسابيع المرفوعة =====
+        // مصفوفة بكل الأيام/التواريخ الفعلية الموجودة في البيانات المرفوعة حالياً، مرتبة تصاعدياً بالتاريخ:
+        // كل عنصر { dateKey: 'yyyy-mm-dd', weekday: 'الاثنين', display: '8/6' } - تُبنى في populateGlobalFilters
+        let dayDateItems = [];
+        // مجموعة مفاتيح التواريخ (yyyy-mm-dd) المُفعّلة حالياً في الفلتر - فاضية = لا يوجد يوم مُفعّل
+        let activeDayDates = new Set();
         let activeVehicleLabels = new Set(); // فاضية = كل المركبات/المندوبين
         let vehicleFilterActive = false; // بتبقى true بس لو فيه أكتر من مركبة/مندوب في البيانات المحمّلة
         let weekdayFilterActive = false; // بتبقى true بس لو فيه أيام أسبوع فعلية موجودة في البيانات المحمّلة
@@ -4943,30 +5006,12 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 if (!activeVehicleLabels.has(label)) return false;
             }
             if (weekdayFilterActive) {
-                if (activeWeekdays.size === 0) return false;
-                if (day.weekday && !activeWeekdays.has(day.weekday)) return false;
-                // ===== تقييد إضافي بالتاريخ الفعلي (وليس فقط اسم اليوم): في وضع "أسبوع" (الافتراضي، تشيك بوكس
-                // "عرض شهر" غير مفعّل) يُعرض فقط التاريخ المحدد لكل اسم يوم مختار (يوم واحد بالضبط كما كان دائماً)،
-                // وفي وضع "شهر" (weekdayMonthMode مفعّل) نسمح بكل التواريخ المطابقة لنفس اسم اليوم عبر كل الأسابيع
-                // المرفوعة - بنفس المنطق المستخدم أصلاً في isInvoiceVisible لضمان تناسق النتائج/الخريطة معاً =====
-                if (day.weekday && day.startTime) {
-                    // ===== لو المستخدم مُحدِّد فترة عبر تقويم اختيار الفترة (بدل مربعات أسماء الأيام)، نعتمد
-                    // مباشرة على مفاتيح تواريخها الفعلية المحسوبة مسبقاً بدل إعادة بنائها من activeWeekdays =====
-                    const activeDateKeys = weekdayDateRangeActive ? weekdayDateRangeKeys : new Set();
-                    if (!weekdayDateRangeActive) {
-                        Array.from(activeWeekdays).forEach(wd => {
-                            if (weekdayMonthMode) {
-                                (weekdayAllDatesMap[wd] || []).forEach(item => activeDateKeys.add(item.dateKey));
-                            } else if (weekdayToDateKeyMap[wd]) {
-                                activeDateKeys.add(weekdayToDateKeyMap[wd]);
-                            }
-                        });
-                    }
-                    if (activeDateKeys.size > 0) {
-                        const dayDateKey = dateKeyFromDate(day.startTime);
-                        if (dayDateKey && !activeDateKeys.has(dayDateKey)) return false;
-                    }
-                }
+                if (activeDayDates.size === 0) return false;
+                // ===== المطابقة الآن بمفتاح فلترة مباشر لكل يوم على حدة: التاريخ الفعلي (yyyy-mm-dd) لو موجود،
+                // أو معرّف اليوم نفسه (nodate:dayId) لو المسار بدون أي تاريخ صالح - بحيث كل يوم مرفوع له مربع
+                // منفصل ومستقل تماماً في الفلتر، حتى لو تشارك يومان في نفس اسم اليوم أو ماكانش لهم تاريخ صالح =====
+                const dayFilterKey = day.startTime ? dateKeyFromDate(day.startTime) : `nodate:${dayId}`;
+                if (dayFilterKey && !activeDayDates.has(dayFilterKey)) return false;
             }
             return true;
         }
@@ -4995,26 +5040,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 else if (!activeVehicleLabels.has(inv.vehicleLabel)) return false;
             }
             if (weekdayFilterActive) {
-                // نطابق بالتاريخ الفعلي (سنة-شهر-يوم) لليوم/الأيام المختارة حالياً من الفلتر، وليس فقط باسم اليوم،
-                // حتى لا تظهر فواتير من أسبوع آخر يصادف نفس اسم اليوم (مثلاً اثنين أسبوع مختلف تماماً).
-                // في وضع "شهر" (weekdayMonthMode) نوسّع المطابقة لتشمل كل تواريخ نفس اسم اليوم عبر كل الأسابيع المرفوعة،
-                // بينما في وضع "أسبوع" الافتراضي يبقى السلوك كما كان تماماً (تاريخ واحد فقط لكل يوم)
-                const activeDateKeys = weekdayDateRangeActive ? weekdayDateRangeKeys : new Set();
-                if (!weekdayDateRangeActive) {
-                    Array.from(activeWeekdays).forEach(wd => {
-                        if (weekdayMonthMode) {
-                            (weekdayAllDatesMap[wd] || []).forEach(item => activeDateKeys.add(item.dateKey));
-                        } else if (weekdayToDateKeyMap[wd]) {
-                            activeDateKeys.add(weekdayToDateKeyMap[wd]);
-                        }
-                    });
-                }
-                if (activeDateKeys.size > 0) {
+                // نطابق بالتاريخ الفعلي (سنة-شهر-يوم) لليوم/الأيام المختارة حالياً من الفلتر (مربع منفصل لكل
+                // يوم+تاريخ)، وليس باسم اليوم، حتى لا تظهر فواتير من أسبوع آخر يصادف نفس اسم اليوم
+                if (activeDayDates.size > 0) {
                     const invDateKey = dateKeyFromDate(inv.invoiceDate);
-                    if (invDateKey && !activeDateKeys.has(invDateKey)) return false;
-                    // لو تعذّر تحديد تاريخ الفاتورة نرجع لمطابقة اسم اليوم القديمة كحل احتياطي فقط
-                    if (!invDateKey && inv.weekday && !activeWeekdays.has(inv.weekday)) return false;
-                } else if (inv.weekday && !activeWeekdays.has(inv.weekday)) {
+                    if (invDateKey && !activeDayDates.has(invDateKey)) return false;
+                    // لو تعذّر تحديد تاريخ الفاتورة نتركها ظاهرة (لا يمكن مطابقتها بدقة على أساس التاريخ)
+                } else {
                     return false;
                 }
             }
@@ -5023,80 +5055,48 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
 
         // تُستدعى بعد تحميل/فتح أي بيانات جديدة لتجهيز خانات الفلترة (أيام الأسبوع + المركبات) من واقع البيانات المحمّلة فعلياً
         function populateGlobalFilters() {
-            const weekdaysPresent = [];
+            // ===== نبني مربعاً منفصلاً لكل يوم فعلي مرفوع (سواء له تاريخ حقيقي أو لأ)، مرتبة تصاعدياً بالتاريخ،
+            // بحيث تظهر كلها بجانب بعضها بغض النظر عن عدد الأيام/الأسابيع المرفوعة. الأيام التي بلا تاريخ صالح
+            // (مسار بدون أي طابع زمني في الملف) بتاخد مفتاح فلترة مستقل خاص بها (nodate:dayId) بدل ما تتلفّق
+            // لها تواريخ وهمية وتندمج مع بعضها أو مع أيام تانية - كده كل يوم مرفوع بيفضل له مربع خاص به مستقل
+            // ومنفصل تماماً عن باقي الأيام، حتى لو مفيهوش تاريخ صالح إطلاقاً ===== 
+            const seenDateKeys = new Set();
+            const items = [];
             const vehicleLabelsPresent = new Set();
-            Object.keys(allDaysData).forEach(dayId => {
-                const day = allDaysData[dayId];
-                if (day && day.weekday && !weekdaysPresent.includes(day.weekday)) weekdaysPresent.push(day.weekday);
-                if (day && day.vehicleLabel) vehicleLabelsPresent.add(day.vehicleLabel);
+            const dayEntries = Object.keys(allDaysData).map(dayId => ({ dayId, day: allDaysData[dayId] })).filter(e => e.day);
+            dayEntries.forEach(({ day }) => {
+                if (day.vehicleLabel) vehicleLabelsPresent.add(day.vehicleLabel);
             });
-            weekdaysPresent.sort((a, b) => WEEKDAY_TAB_ORDER.indexOf(a) - WEEKDAY_TAB_ORDER.indexOf(b));
-
-            weekdayFilterActive = weekdaysPresent.length > 0;
-            activeWeekdays = new Set(weekdaysPresent);
-            weekdayToDateKeyMap = {};
-            // ===== خريطة "اسم اليوم" -> كل التواريخ الفعلية المطابقة له عبر كل الملفات المرفوعة (تدعم أكثر من أسبوع/شهر) =====
-            // تُستخدم فقط عند تفعيل تشيك بوكس "عرض شهر (كل الأسابيع)"؛ في وضع "أسبوع" (الافتراضي) يبقى السلوك
-            // كما كان تماماً بالاعتماد على weekdayToDateKeyMap (تاريخ واحد فقط لكل يوم) بدون أي تأثير
-            weekdayAllDatesMap = {};
-            weekdaysPresent.forEach(wd => {
-                const seenKeys = new Set();
-                const items = [];
-                Object.keys(allDaysData).forEach(dId => {
-                    const d = allDaysData[dId];
-                    if (d && d.weekday === wd && d.startTime) {
-                        const key = dateKeyFromDate(d.startTime);
-                        if (key && !seenKeys.has(key)) {
-                            seenKeys.add(key);
-                            items.push({ dateKey: key, display: formatDayTabDate(d.startTime), startTime: d.startTime });
-                        }
+            dayEntries.forEach(({ dayId, day }) => {
+                if (day.startTime) {
+                    const key = dateKeyFromDate(day.startTime);
+                    if (key && !seenDateKeys.has(key)) {
+                        seenDateKeys.add(key);
+                        items.push({ filterKey: key, weekday: day.weekday || '', display: formatDayTabDate(day.startTime), startTime: day.startTime, sortTime: new Date(day.startTime).getTime() });
                     }
-                });
-                items.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-                weekdayAllDatesMap[wd] = items;
-                if (items.length > 0) weekdayToDateKeyMap[wd] = items[0].dateKey;
-            });
-
-            // ===== حساب أقدم/أحدث تاريخ موجود فعلياً في البيانات المرفوعة، لضبط min/max على حقلي تقويم
-            // اختيار الفترة (يمنع اختيار المستخدم بالغلط لسنة مختلفة عن سنة البيانات الفعلية) =====
-            weekdayDataMinDateKey = null;
-            weekdayDataMaxDateKey = null;
-            Object.values(allDaysData).forEach(day => {
-                if (!day || !day.startTime) return;
-                const key = dateKeyFromDate(day.startTime);
-                if (!key) return;
-                if (weekdayDataMinDateKey === null || key < weekdayDataMinDateKey) weekdayDataMinDateKey = key;
-                if (weekdayDataMaxDateKey === null || key > weekdayDataMaxDateKey) weekdayDataMaxDateKey = key;
-            });
-            const rangeFromInput = document.getElementById('weekdayDateRangeFrom');
-            const rangeToInput = document.getElementById('weekdayDateRangeTo');
-            if (rangeFromInput && rangeToInput) {
-                if (weekdayDataMinDateKey && weekdayDataMaxDateKey) {
-                    rangeFromInput.min = weekdayDataMinDateKey;
-                    rangeFromInput.max = weekdayDataMaxDateKey;
-                    rangeToInput.min = weekdayDataMinDateKey;
-                    rangeToInput.max = weekdayDataMaxDateKey;
                 } else {
-                    rangeFromInput.removeAttribute('min');
-                    rangeFromInput.removeAttribute('max');
-                    rangeToInput.removeAttribute('min');
-                    rangeToInput.removeAttribute('max');
+                    // يوم بدون تاريخ صالح: مربع مستقل خاص به فقط (مربوط بمعرّف اليوم نفسه dayId)، يظهر دايماً
+                    // في آخر الترتيب (بعد كل الأيام المؤرخة) حتى لا يتعارض ترتيبه مع باقي الأيام الحقيقية
+                    items.push({ filterKey: `nodate:${dayId}`, weekday: day.weekday || 'غير محدد التاريخ', display: '', startTime: null, sortTime: Infinity });
                 }
-                // تصفير أي قيم سابقة من ملف/جلسة قديمة حتى لا تبقى قيمة بسنة لا تخص البيانات الحالية المرفوعة حديثاً
-                rangeFromInput.value = '';
-                rangeToInput.value = '';
-            }
+            });
+            items.sort((a, b) => a.sortTime - b.sortTime);
+            dayDateItems = items;
+
+            weekdayFilterActive = dayDateItems.length > 0;
+            activeDayDates = new Set(dayDateItems.map(item => item.filterKey));
+
             const chipsWrap = document.getElementById('weekdayChips');
             const bar = document.getElementById('weekdayFilterBar');
             if (chipsWrap && bar) {
-                if (weekdaysPresent.length > 0) {
+                if (dayDateItems.length > 0) {
                     chipsWrap.innerHTML = '';
-                    weekdaysPresent.forEach(wd => {
+                    dayDateItems.forEach(item => {
                         const chip = document.createElement('div');
                         chip.className = 'weekday-chip active';
-                        chip.dataset.weekday = wd;
-                        chip.innerHTML = buildWeekdayChipHtml(wd);
-                        chip.onclick = () => toggleWeekdayChip(wd, chip);
+                        chip.dataset.filterKey = item.filterKey;
+                        chip.innerHTML = buildDayDateChipHtml(item);
+                        chip.onclick = () => toggleDayDateChip(item.filterKey, chip);
                         chipsWrap.appendChild(chip);
                     });
                     bar.style.display = 'flex';
@@ -5223,114 +5223,19 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             openVehicle(repValue);
         }
 
-        // ===== يبني محتوى مربع اليوم حسب الوضع الحالي: "أسبوع" (تاريخ واحد فقط كما كان دائماً) أو "شهر"
-        // (كل التواريخ المطابقة لنفس اسم اليوم مجمّعة أفقياً أسفل اسم اليوم داخل نفس المربع) =====
-        function buildWeekdayChipHtml(wd) {
-            const allDates = weekdayAllDatesMap[wd] || [];
-            if (!weekdayMonthMode || allDates.length <= 1) {
-                const sampleDate = allDates.length > 0 ? allDates[0].display : '';
-                return `<span class="wd-name">${wd}</span>${sampleDate ? `<span style="font-size:10px;opacity:.75;">${sampleDate}</span>` : ''}`;
-            }
-            const pills = allDates.map(item => `<span class="wd-date-pill">${item.display}</span>`).join('');
-            return `<span class="wd-name">${wd}</span><div class="wd-dates-row">${pills}</div>`;
+        // ===== يبني محتوى مربع يوم+تاريخ واحد: اسم اليوم + تاريخه الفعلي (مثال: الاثنين 8/6) - كل مربع
+        // يمثّل يوماً واحداً بالتحديد بغض النظر عن عدد الأيام الأخرى المرفوعة بنفس اسم اليوم =====
+        function buildDayDateChipHtml(item) {
+            const sampleDate = item.display || '';
+            return `<span class="wd-name">${item.weekday || ''}</span>${sampleDate ? `<span style="font-size:10px;opacity:.75;">${sampleDate}</span>` : ''}`;
         }
 
-        // تُنفَّذ عند تفعيل/إلغاء تشيك بوكس "عرض شهر (كل الأسابيع)" بجانب فلتر اليوم: تعيد رسم محتوى مربعات
-        // الأيام فقط (بدون فقد التحديد الحالي/ترتيب المربعات) ثم تعيد تطبيق الفلاتر حتى تشمل كل التواريخ الظاهرة
-        function toggleWeekdayMonthMode() {
-            const cb = document.getElementById('weekdayMonthModeToggle');
-            weekdayMonthMode = !!(cb && cb.checked);
-            document.querySelectorAll('#weekdayChips .weekday-chip').forEach(chip => {
-                const wd = chip.dataset.weekday;
-                if (wd) chip.innerHTML = buildWeekdayChipHtml(wd);
-            });
-            // ===== عند تفعيل "عرض شهر (كل الأسابيع)" نُخفي مربعات أسماء الأيام ونعرض بدلاً منها تقويم اختيار
-            // فترة (من - إلى) بنفس أسلوب حقول التاريخ في "مقارنة حرارية بين فترتين"، لأنه أسهل لتحديد الأيام
-            // المطلوبة من عدة أسابيع دفعة واحدة. عند إلغاء التفعيل نرجع للمربعات المعتادة كما كانت دائماً =====
-            const chipsEl = document.getElementById('weekdayChips');
-            const rangeEl = document.getElementById('weekdayDateRangePicker');
-            const selectAllBtn = document.getElementById('weekdaySelectAllBtn');
-            const clearBtn = document.getElementById('weekdayClearBtn');
-            if (chipsEl) chipsEl.style.display = weekdayMonthMode ? 'none' : 'flex';
-            if (rangeEl) rangeEl.style.display = weekdayMonthMode ? 'flex' : 'none';
-            if (selectAllBtn) selectAllBtn.style.display = weekdayMonthMode ? 'none' : '';
-            if (clearBtn) clearBtn.style.display = weekdayMonthMode ? 'none' : '';
-            if (!weekdayMonthMode) {
-                // رجوع لوضع "أسبوع" الافتراضي: نلغي أي فترة تقويم كانت مطبّقة حتى لا تتعارض مع مربعات الأيام
-                weekdayDateRangeActive = false;
-                weekdayDateRangeKeys = new Set();
-            } else if (weekdayDataMinDateKey && weekdayDataMaxDateKey) {
-                // ===== عند التفعيل: نملأ الحقلين تلقائياً بأقدم/أحدث تاريخ موجود فعلاً في البيانات المرفوعة
-                // (بدل تركهما فاضيين وترك المستخدم يخمّن السنة الصحيحة بنفسه من التقويم)، ونطبّق الفترة الكاملة
-                // فوراً حتى تظهر كل الأيام مباشرة تماماً كما كانت تظهر في وضع المربعات قبل التفعيل =====
-                const rangeFromInput = document.getElementById('weekdayDateRangeFrom');
-                const rangeToInput = document.getElementById('weekdayDateRangeTo');
-                if (rangeFromInput && !rangeFromInput.value) rangeFromInput.value = weekdayDataMinDateKey;
-                if (rangeToInput && !rangeToInput.value) rangeToInput.value = weekdayDataMaxDateKey;
-                applyWeekdayDateRange();
-                return;
-            }
-            applyGlobalFilters();
-        }
-
-        // تُنفَّذ عند الضغط على "📅 تطبيق" بجانب تقويم اختيار الفترة: تجمع كل التواريخ الفعلية الواقعة بين
-        // التاريخين المحددين (شاملَين) من بين كل الأيام المرفوعة، وتفعّل فلتر اليوم بناءً عليها مباشرة
-        function applyWeekdayDateRange() {
-            const fromVal = document.getElementById('weekdayDateRangeFrom').value;
-            const toVal = document.getElementById('weekdayDateRangeTo').value;
-            if (!fromVal || !toVal) { showToast('⚠️ حدد تاريخ بداية ونهاية للفترة', 'error'); return; }
-            const from = new Date(fromVal);
-            const to = new Date(toVal); to.setHours(23, 59, 59, 999);
-            if (from > to) { showToast('⚠️ تاريخ البداية لازم يكون قبل تاريخ النهاية', 'error'); return; }
-
-            const matchedDateKeys = new Set();
-            const matchedWeekdays = new Set();
-            Object.values(allDaysData).forEach(day => {
-                if (!day || !day.startTime) return;
-                const dt = new Date(day.startTime);
-                if (dt < from || dt > to) return;
-                const key = dateKeyFromDate(day.startTime);
-                if (key) matchedDateKeys.add(key);
-                if (day.weekday) matchedWeekdays.add(day.weekday);
-            });
-
-            if (matchedDateKeys.size === 0) {
-                const rangeHint = (weekdayDataMinDateKey && weekdayDataMaxDateKey)
-                    ? ` (البيانات المتاحة فعلياً من ${weekdayDataMinDateKey} إلى ${weekdayDataMaxDateKey})`
-                    : '';
-                showToast(`⚠️ لا توجد أيام مرفوعة ضمن هذه الفترة${rangeHint}`, 'error');
-                return;
-            }
-
-            weekdayDateRangeActive = true;
-            weekdayDateRangeKeys = matchedDateKeys;
-            activeWeekdays = matchedWeekdays;
-            // نعكس نفس الاختيار بصرياً على مربعات أسماء الأيام (مخفية حالياً) حتى يبقى كل شيء متسق لو رجع
-            // المستخدم لوضع "أسبوع" لاحقاً
-            document.querySelectorAll('#weekdayChips .weekday-chip').forEach(chip => {
-                chip.classList.toggle('active', matchedWeekdays.has(chip.dataset.weekday));
-            });
-            applyGlobalFilters();
-            showToast(`✅ تم تحديد ${matchedDateKeys.size} يوم ضمن الفترة المختارة`, 'success');
-        }
-
-        // إعادة تعيين تقويم اختيار الفترة: تفريغ الحقول وإلغاء الفلترة بالفترة (رجوع لعرض كل الأيام)
-        function clearWeekdayDateRange() {
-            document.getElementById('weekdayDateRangeFrom').value = '';
-            document.getElementById('weekdayDateRangeTo').value = '';
-            weekdayDateRangeActive = false;
-            weekdayDateRangeKeys = new Set();
-            activeWeekdays = new Set();
-            document.querySelectorAll('#weekdayChips .weekday-chip').forEach(chip => chip.classList.remove('active'));
-            applyGlobalFilters();
-        }
-
-        function toggleWeekdayChip(wd, chipEl) {
-            if (activeWeekdays.has(wd)) {
-                activeWeekdays.delete(wd);
+        function toggleDayDateChip(filterKey, chipEl) {
+            if (activeDayDates.has(filterKey)) {
+                activeDayDates.delete(filterKey);
                 chipEl.classList.remove('active');
             } else {
-                activeWeekdays.add(wd);
+                activeDayDates.add(filterKey);
                 chipEl.classList.add('active');
             }
             applyGlobalFilters();
@@ -5339,14 +5244,14 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         function selectAllWeekdays() {
             document.querySelectorAll('#weekdayChips .weekday-chip').forEach(chip => {
                 chip.classList.add('active');
-                activeWeekdays.add(chip.dataset.weekday);
+                if (chip.dataset.filterKey) activeDayDates.add(chip.dataset.filterKey);
             });
             applyGlobalFilters();
         }
 
         function clearAllWeekdays() {
             document.querySelectorAll('#weekdayChips .weekday-chip').forEach(chip => chip.classList.remove('active'));
-            activeWeekdays = new Set();
+            activeDayDates = new Set();
             applyGlobalFilters();
         }
 
@@ -5395,7 +5300,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             });
             updateHorizontalTable();
             // ===== إصلاح: يجب إعادة حساب مربع "عدد فواتير اليوم" في كل مرة تتغيّر فيها فلاتر اليوم/المركبة، لأن هذا
-            // المربع يعتمد على isInvoiceVisible() وهي بدورها تعتمد على activeWeekdays/activeVehicleLabels الحاليين.
+            // المربع يعتمد على isInvoiceVisible() وهي بدورها تعتمد على activeDayDates/activeVehicleLabels الحاليين.
             // بدون هذا الاستدعاء يبقى المربع عارضاً القيمة القديمة (غالباً 0 من أول تحميل) ولا يتحدّث أبداً عند
             // تغيير اليوم المحدَّد من "فلترة حسب اليوم" أعلى الصفحة =====
             updateTodayInvoicesCount();
@@ -11255,14 +11160,16 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 return isNaN(dt.getTime()) ? null : dt;
             };
             if (kmlText) {
-                let m = kmlText.match(/<(?:NAME|name)>[^<]*?(\d{4})(\d{2})(\d{2})[^<]*?<\/(?:NAME|name)>/);
+                let m = kmlText.match(/<(?:NAME|name)>[^<]*?(\d{4})[-_\/.](\d{2})[-_\/.](\d{2})[^<]*?<\/(?:NAME|name)>/);
+                if (!m) m = kmlText.match(/<(?:NAME|name)>[^<]*?(\d{4})(\d{2})(\d{2})[^<]*?<\/(?:NAME|name)>/);
                 if (m) {
                     const dt = dateFromDigits(m[1], m[2], m[3]);
                     if (dt) return dt;
                 }
             }
             if (fileName) {
-                let m = fileName.match(/(\d{4})(\d{2})(\d{2})/);
+                let m = fileName.match(/(\d{4})[-_\/.](\d{2})[-_\/.](\d{2})/);
+                if (!m) m = fileName.match(/(\d{4})(\d{2})(\d{2})/);
                 if (m) {
                     const dt = dateFromDigits(m[1], m[2], m[3]);
                     if (dt) return dt;
@@ -14871,10 +14778,15 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 analysis.totalTime = Math.max(coordinates.length * 2, 60);
                 analysis.endTime = new Date(validTimes[0].getTime() + analysis.totalTime * 1000);
             } else {
-                const now = new Date();
-                analysis.startTime = now;
+                // ===== لا يوجد أي طابع زمني صالح في هذا المسار إطلاقاً: قبل كده كان الكود بيلفّق تاريخاً وهمياً
+                // (لحظة الرفع الفعلية عبر new Date())، وهو ما كان يتسبب في دمج كل الأيام "بدون تاريخ" مع بعضها
+                // تحت نفس اليوم/التاريخ في فلتر "اليوم" (لأنها كلها بترفع تقريباً في نفس اللحظة)، فتختفي عملياً
+                // كأيام منفصلة رغم إنها مسارات مختلفة تماماً. الحل: نسيب التاريخ فارغاً (null) بدل ما نلفّق تاريخ،
+                // وبناءً عليه اليوم ده هيظهر دايماً بشكل مستقل (بعنوان "غير محدد التاريخ") في تبويبه، وهيتضاف له
+                // مربع منفصل خاص به في فلتر اليوم (راجع populateGlobalFilters) بدل ما يندمج مع أي يوم تاني =====
+                analysis.startTime = null;
                 analysis.totalTime = Math.max(coordinates.length * 1.5, 60);
-                analysis.endTime = new Date(now.getTime() + analysis.totalTime * 1000);
+                analysis.endTime = null;
             }
 
             // تحديد اسم اليوم (بالعربي) بناءً على تاريخ المسار، لمطابقته تلقائياً مع حدود نفس اليوم
@@ -15004,21 +14916,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             document.getElementById('weekdayFilterBar').style.display = 'none';
             const vehicleFilterRowEl = document.getElementById('vehicleFilterRow');
             if (vehicleFilterRowEl) vehicleFilterRowEl.style.display = 'none';
-            activeWeekdays = new Set();
+            activeDayDates = new Set();
+            dayDateItems = [];
             activeVehicleLabels = new Set();
             vehicleFilterActive = false;
-            weekdayMonthMode = false;
-            weekdayAllDatesMap = {};
-            weekdayDateRangeActive = false;
-            weekdayDateRangeKeys = new Set();
-            const weekdayMonthModeCb = document.getElementById('weekdayMonthModeToggle');
-            if (weekdayMonthModeCb) weekdayMonthModeCb.checked = false;
-            const weekdayDateRangePickerEl = document.getElementById('weekdayDateRangePicker');
-            if (weekdayDateRangePickerEl) weekdayDateRangePickerEl.style.display = 'none';
-            const weekdayDateRangeFromEl = document.getElementById('weekdayDateRangeFrom');
-            const weekdayDateRangeToEl = document.getElementById('weekdayDateRangeTo');
-            if (weekdayDateRangeFromEl) weekdayDateRangeFromEl.value = '';
-            if (weekdayDateRangeToEl) weekdayDateRangeToEl.value = '';
             const weekdayChipsEl = document.getElementById('weekdayChips');
             if (weekdayChipsEl) weekdayChipsEl.style.display = 'flex';
             const weekdaySelectAllBtnEl = document.getElementById('weekdaySelectAllBtn');
@@ -16801,18 +16702,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         // أو Set (فارغة أو بها مفاتيح) يعني وجود فلتر فعّال يجب الالتزام بحدوده تماماً =====
         function computeReportActiveDateKeys() {
             if (!weekdayFilterActive) return null;
-            if (activeWeekdays.size === 0) return new Set();
-            const activeDateKeys = weekdayDateRangeActive ? new Set(weekdayDateRangeKeys) : new Set();
-            if (!weekdayDateRangeActive) {
-                Array.from(activeWeekdays).forEach(wd => {
-                    if (weekdayMonthMode) {
-                        (weekdayAllDatesMap[wd] || []).forEach(item => activeDateKeys.add(item.dateKey));
-                    } else if (weekdayToDateKeyMap[wd]) {
-                        activeDateKeys.add(weekdayToDateKeyMap[wd]);
-                    }
-                });
-            }
-            return activeDateKeys;
+            return new Set(activeDayDates);
         }
 
         // ===== يبني نسخة "مُصفّاة" من بيانات سيارة معيّنة تقتصر فقط على الأيام المطابقة لمفاتيح التواريخ
