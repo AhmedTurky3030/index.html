@@ -134,6 +134,19 @@
         }
       }
 
+      // ===== التحقق من حظر جهاز معيّن بعينه: الأدمن يقدر من لوحة المراقبة يمنع جهاز واحد بالتحديد من
+      // الوصول (deviceAllowed = false) حتى لو باقي أجهزة نفس الحساب مسموح لها. الحقل ده لو مش موجود
+      // أصلاً (جهاز لسه محدّش لمسه) بيُعتبر مسموح افتراضيًا =====
+      async function isDeviceBlocked(user, deviceId) {
+        try {
+          const deviceSnap = await getDoc(doc(db, "users", user.uid, "devices", deviceId));
+          return deviceSnap.exists() && deviceSnap.data().deviceAllowed === false;
+        } catch (e) {
+          console.error("isDeviceBlocked error:", e);
+          return false;
+        }
+      }
+
       // ===== نبضة دورية (heartbeat): بترسل توقيت "الآن" كل فترة ثابتة طول ما الصفحة مفتوحة وواضحة على
       // الشاشة، سواء على مستوى الحساب كله (users/{uid}.lastActive) أو على مستوى الجهاز نفسه
       // (users/{uid}/devices/{deviceId}.lastActive). لوحة المراقبة بتقارن آخر نبضة بالوقت الحالي عشان
@@ -168,6 +181,13 @@
                 if (userDoc.exists() && userDoc.data().allowed === true) {
                   const userData = userDoc.data();
                   const deviceId = getDeviceId();
+                  const deviceBlocked = await isDeviceBlocked(user, deviceId);
+                  if (deviceBlocked) {
+                    await signOut(auth);
+                    const overlay = getOverlay();
+                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تم حظر هذا الجهاز تحديدًا من الوصول لهذا الحساب، حتى لو باقي أجهزتك مسموح لها. تواصل مع مسؤول النظام.</h2>";
+                    return;
+                  }
                   const allowedDevice = await checkDeviceLimit(user, deviceId, userData.maxDevices);
                   if (!allowedDevice) {
                     await signOut(auth);
@@ -390,7 +410,8 @@
                 lastSeen: dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().toLocaleString("ar-EG") : "-",
                 firstSeen: dv.firstSeen && dv.firstSeen.toDate ? dv.firstSeen.toDate().toLocaleString("ar-EG") : "-",
                 loginCount: dv.loginCount || 1,
-                lastActiveMs
+                lastActiveMs,
+                allowed: dv.deviceAllowed !== false
               };
             });
             // آخر نشاط للحساب ككل = الأحدث بين نبضة الحساب نفسه ونبضات كل أجهزته (تحسّبًا لحسابات
@@ -560,7 +581,7 @@
                 <td><button class="ap-detailsbtn" data-uid="${u.id}">الأجهزة ▾</button></td>
               </tr>
               <tr class="ap-devrow" id="__devrow_${u.id}__" style="display:none;">
-                <td colspan="8">${renderDeviceDetails(u.devices)}</td>
+                <td colspan="8">${renderDeviceDetails(u.devices, u.id)}</td>
               </tr>
             `; }).join("");
 
@@ -628,15 +649,51 @@
                 if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
               });
             });
+
+            // تبديل صلاحية الوصول لجهاز معيّن بعينه (مسموح / محظور)، بغض النظر عن باقي أجهزة نفس الحساب
+            tbody.querySelectorAll(".ap-device-allow-toggle").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const target = e.currentTarget;
+                const uid = target.dataset.uid;
+                const deviceId = target.dataset.deviceId;
+                const next = target.dataset.allowed !== "1";
+                target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid, "devices", deviceId), { deviceAllowed: next });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) {
+                    const d = u.devices.find(x => x.id === deviceId);
+                    if (d) d.allowed = next;
+                  }
+                  target.dataset.allowed = next ? "1" : "0";
+                  target.textContent = next ? "✅ مسموح" : "⛔ محظور";
+                  target.className = "ap-device-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
+                } catch (err) {
+                  console.error("toggle device allowed error:", err);
+                  alert("تعذّر تغيير صلاحية الجهاز — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على users/{uid}/devices/{deviceId})");
+                } finally {
+                  target.disabled = false;
+                }
+              });
+            });
           }
 
-          function renderDeviceDetails(devices) {
+          function renderDeviceDetails(devices, uid) {
             if (!devices.length) return `<div class="ap-empty" style="padding:14px;">لا توجد أجهزة مسجّلة لهذا المستخدم</div>`;
             const nowMs = Date.now();
-            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>الحالة</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
+            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>الحالة</th><th>الوصول</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
             devices.forEach(d => {
               const online = d.lastActiveMs > 0 && (nowMs - d.lastActiveMs) < ONLINE_THRESHOLD_MS;
-              html += `<tr><td style="font-size:11px;">${d.id}</td><td>${d.platform}</td><td>${d.screen}</td><td>${online ? '🟢 متصل' : '⚪ غير متصل'}</td><td>${d.firstSeen}</td><td>${d.lastSeen}</td><td>${d.loginCount}</td></tr>`;
+              html += `<tr>
+                <td style="font-size:11px;">${d.id}</td>
+                <td>${d.platform}</td>
+                <td>${d.screen}</td>
+                <td>${online ? '🟢 متصل' : '⚪ غير متصل'}</td>
+                <td><button class="ap-device-allow-toggle ${d.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${uid}" data-device-id="${d.id}" data-allowed="${d.allowed ? '1' : '0'}">${d.allowed ? '✅ مسموح' : '⛔ محظور'}</button></td>
+                <td>${d.firstSeen}</td>
+                <td>${d.lastSeen}</td>
+                <td>${d.loginCount}</td>
+              </tr>`;
             });
             html += `</tbody></table>`;
             return html;
