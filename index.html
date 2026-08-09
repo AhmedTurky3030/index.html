@@ -387,16 +387,21 @@
         if (__followerSharePushTimer) clearTimeout(__followerSharePushTimer);
         __followerSharePushTimer = setTimeout(pushFollowerShareNow, FOLLOWER_SHARE_PUSH_DEBOUNCE_MS);
       }
+      // مهم: هذا الكود جوه <script type="module">، لكن dbPutVehicle/dbDeleteVehicleRecord اللي بيستدعوا الدالة دي
+      // تحت (عند حفظ/حذف سيارة) موجودين في <script> عادي منفصل (scope مختلف تماماً عن الموديول). عشان يقدروا
+      // يوصلوا لها لازم نعلّقها على window صراحة، لأن الموديولات (على عكس السكريبتات العادية) مبتحطش
+      // الدوال بتاعتها على window تلقائياً
+      window.schedulePushFollowerShare = schedulePushFollowerShare;
 
       async function pushFollowerShareNow() {
         if (__currentUserRole !== "follower" || !auth.currentUser) return;
-        if (typeof buildExportPayload !== "function") return;
+        if (typeof window.buildExportPayload !== "function") return;
         try {
-          const payload = buildExportPayload();
+          const payload = window.buildExportPayload();
           const jsonStr = JSON.stringify(payload);
           if (jsonStr.length > FOLLOWER_SHARE_MAX_BYTES) {
-            if (typeof showToast === "function") {
-              showToast("⚠️ حجم البيانات كبير جداً للمزامنة اللحظية — استخدم زر \"نسخة JSON\" لمشاركتها يدوياً بدلاً من ذلك", "error", 8000);
+            if (typeof window.showToast === "function") {
+              window.showToast("⚠️ حجم البيانات كبير جداً للمزامنة اللحظية — استخدم زر \"نسخة JSON\" لمشاركتها يدوياً بدلاً من ذلك", "error", 8000);
             }
             return;
           }
@@ -427,9 +432,11 @@
           } else {
             parsed.vehicles = [];
           }
-          if (typeof importVehiclesData === "function") {
-            await importVehiclesData(parsed);
-            if (typeof showToast === "function") showToast("🔄 تم تحديث النتائج لحظياً", "success");
+          // importVehiclesData و showToast معرّفين في السكريبت العادي (مش الموديول)، فلازم نستدعيهم عبر window
+          // لنفس سبب schedulePushFollowerShare فوق
+          if (typeof window.importVehiclesData === "function") {
+            await window.importVehiclesData(parsed);
+            if (typeof window.showToast === "function") window.showToast("🔄 تم تحديث النتائج لحظياً", "success");
           }
         }, (err) => {
           console.error("subscribeToFollowerShare error:", err);
@@ -15653,7 +15660,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 try {
                     const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
                     tx.objectStore(VEHICLES_STORE).put(vehicle);
-                    schedulePushFollowerShare();
+                    if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
                     return;
                 } catch (e) { console.warn('تعذر حفظ السيارة محلياً:', e); }
             }
@@ -15665,7 +15672,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     lsSaveVehiclesMap(map);
                 } catch (e) { console.warn('تعذر حفظ السيارة في localStorage:', e); }
             }
-            schedulePushFollowerShare();
+            if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
         }
 
         function dbDeleteVehicleRecord(id) {
@@ -15684,7 +15691,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     tx.objectStore(VEHICLES_STORE).delete(id);
                 } catch (e) { console.warn('تعذر حذف السيارة محلياً:', e); }
             }
-            schedulePushFollowerShare();
+            if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
         }
 
         function dbGetAllVehicles() {
