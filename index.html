@@ -378,7 +378,11 @@
       // (onSnapshot) لنفس المستند، ويفلتر السيارات حسب القطاع (للمدير) أو اسم المشرف (للمشرف) بتاعه بس، ثم
       // يستوردها تلقائياً في التطبيق (نفس دالة "استيراد نسخة" الموجودة أصلاً) بحيث تظهر "شاشة النتائج" مُحدَّثة =====
       const FOLLOWER_SHARE_PUSH_DEBOUNCE_MS = 4000;
-      const FOLLOWER_SHARE_MAX_BYTES = 900000; // هامش أمان تحت حد الـ1MB لمستند Firestore الواحد
+      // ===== حد الـ1MB لكل مستند Firestore حد صارم من جوجل نفسها ومينفعش يتلغى، فبدل ما نمنع المزامنة لو
+      // البيانات كبرت، بنقسم نص الـ JSON على عدة مستندات فرعية (chunks) صغيرة تحت مستند المتابع نفسه، وبنجمعهم
+      // تاني عند القراءة. بالطريقة دي حجم بيانات المتابع بقى غير محدود عمليًا وتفضل المزامنة اللحظية شغالة
+      // دايمًا مهما كبر حجم سياراته/فواتيره، بدون أي تدخل يدوي بزر "نسخة JSON" =====
+      const FOLLOWER_SHARE_CHUNK_CHARS = 400000; // حجم آمن جدًا لكل مستند فرعي حتى لو كل الحروف عربية (٢ بايت لكل حرف) يفضل الحجم أقل من 1MB
       let __followerSharePushTimer = null;
       let __liveViewUnsubscribe = null;
 
@@ -399,32 +403,61 @@
         try {
           const payload = window.buildExportPayload();
           const jsonStr = JSON.stringify(payload);
-          if (jsonStr.length > FOLLOWER_SHARE_MAX_BYTES) {
-            if (typeof window.showToast === "function") {
-              window.showToast("⚠️ حجم البيانات كبير جداً للمزامنة اللحظية — استخدم زر \"نسخة JSON\" لمشاركتها يدوياً بدلاً من ذلك", "error", 8000);
-            }
-            return;
+          const uid = auth.currentUser.uid;
+          const metaRef = doc(db, "followerShares", uid);
+
+          const chunkCount = Math.max(1, Math.ceil(jsonStr.length / FOLLOWER_SHARE_CHUNK_CHARS));
+          // نقرأ أعلى عدد مستندات فرعية استُخدم في أي مزامنة سابقة (maxChunkCount) حتى لو النسخة الحالية
+          // أصغر من السابقة، نمسح (نفرّغ) أي مستندات فرعية زيادة فضلت من المرة اللي فاتت بدل ما تفضل بيانات
+          // قديمة "كاش" معلّقة تظهر غلط عند القراءة
+          const metaSnap = await getDoc(metaRef);
+          const prevMaxChunkCount = (metaSnap.exists() && metaSnap.data().maxChunkCount) || 0;
+          const maxChunkCount = Math.max(prevMaxChunkCount, chunkCount);
+
+          const writes = [];
+          for (let i = 0; i < chunkCount; i++) {
+            const chunkText = jsonStr.slice(i * FOLLOWER_SHARE_CHUNK_CHARS, (i + 1) * FOLLOWER_SHARE_CHUNK_CHARS);
+            writes.push(setDoc(doc(db, "followerShares", uid, "chunks", String(i)), { text: chunkText }));
           }
-          await setDoc(doc(db, "followerShares", auth.currentUser.uid), {
+          for (let i = chunkCount; i < maxChunkCount; i++) {
+            writes.push(setDoc(doc(db, "followerShares", uid, "chunks", String(i)), { text: "" }));
+          }
+          writes.push(setDoc(metaRef, {
             updatedAt: serverTimestamp(),
-            payload: jsonStr
-          }, { merge: true });
+            chunkCount,
+            maxChunkCount
+          }, { merge: true }));
+
+          await Promise.all(writes);
         } catch (err) {
           console.error("pushFollowerShareNow error:", err);
         }
       }
 
-      // يبدأ الاستماع اللحظي لمشاركة متابع معيّن، ويفلتر النتائج حسب نطاق المستخدم الحالي (قطاع مدير / مجموعة مشرف)
+      // يبدأ الاستماع اللحظي لمشاركة متابع معيّن، ويفلتر النتائج حسب نطاق المستخدم الحالي (قطاع مدير / مجموعة مشرف).
+      // نستمع لمستند "الميتاداتا" (chunkCount) لحظيًا؛ أي تغيير فيه (يعني المتابع حفظ/عدّل حاجة) يخلينا نجيب كل
+      // المستندات الفرعية الحالية ونجمّعها في نص JSON واحد قبل التحليل =====
       function subscribeToFollowerShare(followerUid, filterInfo) {
         if (!followerUid) return;
         if (__liveViewUnsubscribe) { __liveViewUnsubscribe(); __liveViewUnsubscribe = null; }
-        const ref = doc(db, "followerShares", followerUid);
-        __liveViewUnsubscribe = onSnapshot(ref, async (snap) => {
+        const metaRef = doc(db, "followerShares", followerUid);
+        __liveViewUnsubscribe = onSnapshot(metaRef, async (snap) => {
           if (!snap.exists()) return;
-          const data = snap.data();
-          if (!data || !data.payload) return;
+          const meta = snap.data();
+          const chunkCount = meta && meta.chunkCount ? meta.chunkCount : 0;
+          if (chunkCount <= 0) return;
+          let jsonStr;
+          try {
+            const chunkSnaps = await Promise.all(
+              Array.from({ length: chunkCount }, (_, i) => getDoc(doc(db, "followerShares", followerUid, "chunks", String(i))))
+            );
+            jsonStr = chunkSnaps.map(s => (s.exists() && s.data().text) ? s.data().text : "").join("");
+          } catch (e) {
+            console.error("live share chunks fetch error:", e);
+            return;
+          }
           let parsed;
-          try { parsed = JSON.parse(data.payload); } catch (e) { console.error("live share parse error:", e); return; }
+          try { parsed = JSON.parse(jsonStr); } catch (e) { console.error("live share parse error:", e); return; }
           if (filterInfo.mode === "sector" && filterInfo.sector) {
             parsed.vehicles = (parsed.vehicles || []).filter(v => (v.sectorName || "") === filterInfo.sector);
           } else if (filterInfo.mode === "supervisorGroup" && filterInfo.supervisorName) {
