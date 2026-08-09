@@ -8,7 +8,7 @@
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
       import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
-      import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, getDocs, query, orderBy, limit, increment, updateDoc } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+      import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, getDocs, query, orderBy, limit, increment, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
       // ←←← حط بيانات مشروعك هنا
       const firebaseConfig = {
         apiKey: "AIzaSyAw_jhByWs2zbpA-v32yckGj_AGQ0Z5_ws",
@@ -199,6 +199,12 @@
                   logLoginEvent(user, deviceId);
                   startHeartbeat(user, deviceId);
                   removeOverlay();
+                  applyFeatureGating(userData);
+                  if (userData.role === "manager" && userData.viewingFollowerUid) {
+                    subscribeToFollowerShare(userData.viewingFollowerUid, { mode: "sector", sector: userData.viewingSector || "" });
+                  } else if (userData.role === "supervisor" && userData.viewingFollowerUid) {
+                    subscribeToFollowerShare(userData.viewingFollowerUid, { mode: "supervisorGroup", supervisorName: userData.supervisorName || "" });
+                  }
                   if (userData.isAdmin === true) {
                     addAdminButton();
                   }
@@ -263,6 +269,174 @@
       // تبويب سجل الدخول، وتبويب إحصائيات برسم بياني لعدد مرات الدخول خلال آخر 7 أو 30 يوم =====
       let __adminUsersCache = [];
       let __adminChartLogs = [];
+
+      // ===== نظام "الصلاحيات" الدقيقة: الأدمن يحدد لكل مستخدم دوره (مستخدم/متابع/مدير/مشرف) وأي من
+      // الوظائف العشرة التالية مسموح له بالوصول إليها. تُخزَّن في users/{uid}.role و users/{uid}.permissions.
+      // أي حساب قديم (من قبل هذه الميزة) بلا هذه الحقول يُعامَل تلقائياً كـ"مستخدم" بكل الصلاحيات مفعّلة،
+      // حتى لا يتعطل أي حساب حالي فجأة بمجرد إضافة الميزة =====
+      const FEATURE_DEFS = [
+        { key: "carsBoard", label: "🚗 لوحة السيارات" },
+        { key: "addCar", label: "➕ إضافة سيارة جديدة" },
+        { key: "delegatesRanking", label: "🏆 ترتيب أداء المناديب" },
+        { key: "sectorReport", label: "📄 تقرير مجمّع بالقطاع" },
+        { key: "dailyCoverage", label: "📍 نسبة تغطية المسار اليومي" },
+        { key: "comparisonReport", label: "📊 تقرير المقارنة" },
+        { key: "jsonExport", label: "💾 نسخة JSON" },
+        { key: "htmlExport", label: "💾 نسخة HTML شاملة" },
+        { key: "importVersion", label: "📂 استيراد نسخة" },
+        { key: "resultsScreen", label: "📈 شاشة النتائج" }
+      ];
+      // ربط كل مفتاح صلاحية بالدالة الأصلية التي تفتح الوظيفة، ومحدد CSS للزر الظاهر بلوحة السيارات (لو له زر ثابت)
+      const FEATURE_GATE_MAP = {
+        carsBoard: { fn: "showVehiclesDashboard", selector: null },
+        addCar: { fn: "startAddVehicle", selector: '[onclick="startAddVehicle()"]' },
+        delegatesRanking: { fn: "showRepRankingReport", selector: '[onclick="showRepRankingReport()"]' },
+        sectorReport: { fn: "exportSectorSummaryPDF", selector: '[onclick="exportSectorSummaryPDF()"]' },
+        dailyCoverage: { fn: "showDailyRouteCoverageScreen", selector: '[onclick="showDailyRouteCoverageScreen()"]' },
+        comparisonReport: { fn: "showComparisonReportScreen", selector: '[onclick="showComparisonReportScreen()"]' },
+        jsonExport: { fn: "exportVehiclesJSON", selector: '[onclick="exportVehiclesJSON()"]' },
+        htmlExport: { fn: "exportVehiclesHTML", selector: '[onclick="exportVehiclesHTML()"]' },
+        importVersion: { fn: "triggerImportVehicles", selector: '[onclick="triggerImportVehicles()"]' },
+        resultsScreen: { fn: "openVehicle", selector: null }
+      };
+      const ROLE_LABELS = { user: "مستخدم", follower: "متابع", manager: "مدير", supervisor: "مشرف" };
+      function defaultPermissions() {
+        const p = {};
+        FEATURE_DEFS.forEach(f => p[f.key] = true);
+        return p;
+      }
+      // يدمج صلاحيات محفوظة (لو موجودة) فوق الصلاحيات الافتراضية (كلها مفعّلة)، حتى لو نقصت مفاتيح جديدة أُضيفت لاحقاً
+      function normalizePermissions(saved) {
+        const p = defaultPermissions();
+        if (saved && typeof saved === "object") Object.keys(p).forEach(k => { if (saved[k] === false) p[k] = false; });
+        return p;
+      }
+
+      let __currentUserPerms = defaultPermissions();
+      let __currentUserRole = "user";
+      let __currentUserIsAdmin = false;
+      let __featuresGated = false;
+
+      // يُحدِّث إظهار/إخفاء كل أزرار الوظائف العشرة حسب صلاحيات المستخدم الحالي (يُستدعى عند الدخول وعند أي تحديث لاحق)
+      function refreshFeatureButtonsVisibility() {
+        Object.keys(FEATURE_GATE_MAP).forEach(key => {
+          const sel = FEATURE_GATE_MAP[key].selector;
+          if (!sel) return;
+          document.querySelectorAll(sel).forEach(btn => {
+            btn.style.display = (!__currentUserIsAdmin && __currentUserPerms[key] === false) ? "none" : "";
+          });
+        });
+        const dash = document.getElementById("vehiclesDashboard");
+        const existingMsg = document.getElementById("__no_carsboard_msg__");
+        if (!__currentUserIsAdmin && __currentUserPerms.carsBoard === false) {
+          if (dash && !existingMsg) {
+            const msg = document.createElement("div");
+            msg.id = "__no_carsboard_msg__";
+            msg.style.cssText = "text-align:center;padding:80px 20px;color:#888;font-family:'Cairo',Arial,sans-serif;";
+            msg.innerHTML = "<h2>🔒 ليس لديك صلاحية للوصول إلى لوحة السيارات</h2><p>تواصل مع مسؤول النظام لتفعيل هذه الصلاحية.</p>";
+            if (dash.parentNode) dash.parentNode.insertBefore(msg, dash);
+          }
+        } else if (existingMsg) {
+          existingMsg.remove();
+        }
+      }
+
+      // يُنفَّذ مرة واحدة فقط بعد الدخول: يغلّف كل دالة من الدوال العشرة بحيث تتحقق من الصلاحية قبل التنفيذ
+      function wrapFeatureFunctionsOnce() {
+        if (__featuresGated) return;
+        __featuresGated = true;
+        Object.keys(FEATURE_GATE_MAP).forEach(key => {
+          const fnName = FEATURE_GATE_MAP[key].fn;
+          const original = window[fnName];
+          if (typeof original !== "function") return;
+          window[fnName] = function (...args) {
+            if (__currentUserIsAdmin || __currentUserPerms[key] !== false) {
+              return original.apply(this, args);
+            }
+            alert("ليس لديك صلاحية للوصول إلى هذه الوظيفة. تواصل مع مسؤول النظام.");
+          };
+        });
+      }
+
+      // يُستدعى فور تأكيد الدخول (من onAuthStateChanged) بعد قراءة مستند المستخدم، لضبط صلاحياته على كل الأزرار
+      function applyFeatureGating(userData) {
+        __currentUserRole = userData.role || "user";
+        __currentUserIsAdmin = !!userData.isAdmin;
+        __currentUserPerms = normalizePermissions(userData.permissions);
+        if (__currentUserIsAdmin) { refreshFeatureButtonsVisibility(); return; }
+        wrapFeatureFunctionsOnce();
+        refreshFeatureButtonsVisibility();
+      }
+      window.applyFeatureGating = applyFeatureGating;
+
+      // ===== المزامنة اللحظية لـ"شاشة النتائج" بين حساب "متابع" وحسابات "مدير"/"مشرف" التي يحددها له الأدمن =====
+      // الفكرة: بيانات لوحة السيارات مخزّنة محلياً على جهاز كل مستخدم (IndexedDB/localStorage) وليس فيه قاعدة
+      // بيانات مركزية لها أصلاً. فلو المستخدم الحالي دوره "متابع"، أي إضافة/تعديل/حذف/استيراد سيارة على جهازه
+      // بيُرفع (بعد تأخير بسيط لتجميع عدة تغييرات معاً) كنسخة JSON كاملة إلى مستند Firestore واحد
+      // (followerShares/{uid}) بنفس صيغة "نسخة JSON" الموجودة أصلاً بالنظام. وفي المقابل، لو المستخدم الحالي
+      // دوره "مدير" أو "مشرف" وله متابع محدد (viewingFollowerUid من مستند حسابه، حدده الأدمن)، بيستمع لحظياً
+      // (onSnapshot) لنفس المستند، ويفلتر السيارات حسب القطاع (للمدير) أو اسم المشرف (للمشرف) بتاعه بس، ثم
+      // يستوردها تلقائياً في التطبيق (نفس دالة "استيراد نسخة" الموجودة أصلاً) بحيث تظهر "شاشة النتائج" مُحدَّثة =====
+      const FOLLOWER_SHARE_PUSH_DEBOUNCE_MS = 4000;
+      const FOLLOWER_SHARE_MAX_BYTES = 900000; // هامش أمان تحت حد الـ1MB لمستند Firestore الواحد
+      let __followerSharePushTimer = null;
+      let __liveViewUnsubscribe = null;
+
+      function schedulePushFollowerShare() {
+        if (__currentUserRole !== "follower" || !auth.currentUser) return;
+        if (__followerSharePushTimer) clearTimeout(__followerSharePushTimer);
+        __followerSharePushTimer = setTimeout(pushFollowerShareNow, FOLLOWER_SHARE_PUSH_DEBOUNCE_MS);
+      }
+
+      async function pushFollowerShareNow() {
+        if (__currentUserRole !== "follower" || !auth.currentUser) return;
+        if (typeof buildExportPayload !== "function") return;
+        try {
+          const payload = buildExportPayload();
+          const jsonStr = JSON.stringify(payload);
+          if (jsonStr.length > FOLLOWER_SHARE_MAX_BYTES) {
+            if (typeof showToast === "function") {
+              showToast("⚠️ حجم البيانات كبير جداً للمزامنة اللحظية — استخدم زر \"نسخة JSON\" لمشاركتها يدوياً بدلاً من ذلك", "error", 8000);
+            }
+            return;
+          }
+          await setDoc(doc(db, "followerShares", auth.currentUser.uid), {
+            updatedAt: serverTimestamp(),
+            payload: jsonStr
+          }, { merge: true });
+        } catch (err) {
+          console.error("pushFollowerShareNow error:", err);
+        }
+      }
+
+      // يبدأ الاستماع اللحظي لمشاركة متابع معيّن، ويفلتر النتائج حسب نطاق المستخدم الحالي (قطاع مدير / مجموعة مشرف)
+      function subscribeToFollowerShare(followerUid, filterInfo) {
+        if (!followerUid) return;
+        if (__liveViewUnsubscribe) { __liveViewUnsubscribe(); __liveViewUnsubscribe = null; }
+        const ref = doc(db, "followerShares", followerUid);
+        __liveViewUnsubscribe = onSnapshot(ref, async (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (!data || !data.payload) return;
+          let parsed;
+          try { parsed = JSON.parse(data.payload); } catch (e) { console.error("live share parse error:", e); return; }
+          if (filterInfo.mode === "sector" && filterInfo.sector) {
+            parsed.vehicles = (parsed.vehicles || []).filter(v => (v.sectorName || "") === filterInfo.sector);
+          } else if (filterInfo.mode === "supervisorGroup" && filterInfo.supervisorName) {
+            parsed.vehicles = (parsed.vehicles || []).filter(v => (v.supervisorName || "") === filterInfo.supervisorName);
+          } else {
+            parsed.vehicles = [];
+          }
+          if (typeof importVehiclesData === "function") {
+            await importVehiclesData(parsed);
+            if (typeof showToast === "function") showToast("🔄 تم تحديث النتائج لحظياً", "success");
+          }
+        }, (err) => {
+          console.error("subscribeToFollowerShare error:", err);
+        });
+      }
+      window.subscribeToFollowerShare = subscribeToFollowerShare;
+
       function addAdminButton() {
         if (document.getElementById("__admin_btn__")) return;
         const btn = document.createElement("button");
@@ -323,6 +497,7 @@
           #__admin_modal__ .ap-chart-controls { display:flex; gap:8px; margin-bottom:14px; }
           #__admin_modal__ .ap-range-btn { padding:7px 16px; border:1.5px solid #e3e3ef; background:#fff; border-radius:20px; cursor:pointer; font-size:13px; font-weight:700; color:#8a8aa3; }
           #__admin_modal__ .ap-range-btn.active { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; border-color:transparent; }
+          #__admin_modal__ .ap-role-select { border:1.5px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; }
         `;
         document.head.appendChild(style);
       }
@@ -428,7 +603,15 @@
               devices,
               maxDevices: u.maxDevices || null,
               lastActiveMs,
-              online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS
+              online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS,
+              role: u.role || "user",
+              permissions: normalizePermissions(u.permissions),
+              assignedManagers: u.assignedManagers || {},
+              assignedSupervisors: u.assignedSupervisors || {},
+              supervisorName: u.supervisorName || "",
+              viewingFollowerUid: u.viewingFollowerUid || null,
+              viewingSector: u.viewingSector || null,
+              viewingMode: u.viewingMode || null
             });
           }
           __adminUsersCache = users;
@@ -524,6 +707,7 @@
               <button class="ap-tab active" data-tab="users">المستخدمون</button>
               <button class="ap-tab" data-tab="logs">سجل الدخول</button>
               <button class="ap-tab" data-tab="chart">الإحصائيات</button>
+              <button class="ap-tab" data-tab="permissions">🔐 الصلاحيات</button>
             </div>
             <div id="__tab_users__">
               <input type="text" id="__user_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
@@ -548,6 +732,19 @@
                 <button class="ap-range-btn" data-range="30">آخر 30 يوم</button>
               </div>
               <div id="__chart_container__" style="overflow-x:auto;"></div>
+            </div>
+            <div id="__tab_permissions__" style="display:none;">
+              <p style="font-size:12px;color:#8a8aa3;margin:0 0 12px;">
+                حدّد لكل مستخدم دوره، وأي الوظائف مسموح له بالوصول إليها. المستخدم "متابع" يقدر كمان تحدّد له
+                أي مستخدمي "مدير"/"مشرف" يظهر له نتائجهم (قطاع معيّن لكل مدير، أو مجموعته الكاملة لكل مشرف).
+              </p>
+              <input type="text" id="__perm_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
+              <div style="overflow:auto;max-height:56vh;">
+                <table>
+                  <thead><tr><th>المستخدم</th><th>الدور</th><th>الوظائف المسموحة</th><th></th></tr></thead>
+                  <tbody id="__perm_tbody__"></tbody>
+                </table>
+              </div>
             </div>
           `;
 
@@ -699,8 +896,305 @@
             return html;
           }
 
+          // ---- عرض/بحث جدول "الصلاحيات": دور كل مستخدم + الوظائف المسموحة له + (للمتابع فقط) تحديد
+          // أي مديرين/مشرفين يظهر لهم نتائجهم ----
+          function renderPermissionsTab(filter) {
+            const tbody = document.getElementById("__perm_tbody__");
+            if (!tbody) return;
+            const f = (filter || "").trim().toLowerCase();
+            const rows = __adminUsersCache.filter(u =>
+              !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
+            );
+            if (rows.length === 0) {
+              tbody.innerHTML = `<tr><td colspan="4" class="ap-empty">لا يوجد نتائج</td></tr>`;
+              return;
+            }
+            tbody.innerHTML = rows.map(u => {
+              const roleOptions = Object.keys(ROLE_LABELS).map(r =>
+                `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
+              const permCount = FEATURE_DEFS.filter(f2 => u.permissions[f2.key] !== false).length;
+              const supervisorNameField = u.role === "supervisor"
+                ? `<input type="text" class="ap-supname-input" data-uid="${u.id}" value="${(u.supervisorName || '').replace(/"/g,'&quot;')}" placeholder="اسم المشرف كما يظهر في لوحة السيارات" style="border:1.5px solid #e3e3ef;border-radius:8px;padding:5px 8px;font-size:11px;width:100%;margin-top:4px;">`
+                : "";
+              let liveStatus = "";
+              if ((u.role === "manager" || u.role === "supervisor") && u.viewingFollowerUid) {
+                const follower = __adminUsersCache.find(x => x.id === u.viewingFollowerUid);
+                const followerLabel = follower ? (follower.nickname || follower.email) : u.viewingFollowerUid;
+                liveStatus = u.role === "manager"
+                  ? `<div style="font-size:10px;color:#1a9d5c;margin-top:4px;">📡 يتابع لحظياً: ${followerLabel} — قطاع ${u.viewingSector || "—"}</div>`
+                  : `<div style="font-size:10px;color:#1a9d5c;margin-top:4px;">📡 يتابع لحظياً: ${followerLabel}</div>`;
+              }
+              return `
+              <tr>
+                <td>${u.nickname || u.email}${u.isAdmin ? ' <span class="ap-badge admin">أدمن</span>' : ''}<div style="font-size:11px;color:#8a8aa3;">${u.email}</div></td>
+                <td><select class="ap-role-select" data-uid="${u.id}">${roleOptions}</select>${supervisorNameField}${liveStatus}</td>
+                <td>${permCount} / ${FEATURE_DEFS.length}</td>
+                <td>
+                  <button class="ap-detailsbtn ap-permbtn" data-uid="${u.id}">⚙️ الوظائف ▾</button>
+                  ${u.role === "follower" ? `<button class="ap-detailsbtn ap-followerbtn" data-uid="${u.id}" style="margin-right:4px;">👁️ من يظهر له ▾</button>` : ""}
+                </td>
+              </tr>
+              <tr class="ap-devrow" id="__permrow_${u.id}__" style="display:none;">
+                <td colspan="4">${renderPermChecklist(u)}</td>
+              </tr>
+              <tr class="ap-devrow" id="__followerrow_${u.id}__" style="display:none;">
+                <td colspan="4">${u.role === "follower" ? renderFollowerAssignments(u) : ""}</td>
+              </tr>
+            `; }).join("");
+
+            // حفظ "اسم المشرف" المرتبط بحساب دوره مشرف (يُستخدم لفلترة نتائج مجموعته فقط عند المتابعة اللحظية)
+            tbody.querySelectorAll(".ap-supname-input").forEach(inp => {
+              inp.addEventListener("change", async (e) => {
+                const uid = e.target.dataset.uid;
+                const val = e.target.value.trim();
+                try {
+                  await updateDoc(doc(db, "users", uid), { supervisorName: val });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.supervisorName = val;
+                } catch (err) {
+                  console.error("save supervisorName error:", err);
+                  alert("تعذّر حفظ اسم المشرف — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+
+            // تبديل الدور (مستخدم/متابع/مدير/مشرف)
+            tbody.querySelectorAll(".ap-role-select").forEach(sel => {
+              sel.addEventListener("change", async (e) => {
+                const uid = e.target.value !== undefined ? e.target.dataset.uid : null;
+                const newRole = e.target.value;
+                e.target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid), { role: newRole });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.role = newRole;
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                } catch (err) {
+                  console.error("save role error:", err);
+                  alert("تعذّر حفظ الدور — تحقق من صلاحيات Firestore Rules");
+                } finally {
+                  e.target.disabled = false;
+                }
+              });
+            });
+
+            // إظهار/إخفاء صف الوظائف
+            tbody.querySelectorAll(".ap-permbtn").forEach(btn => {
+              btn.addEventListener("click", (e) => {
+                const uid = e.target.dataset.uid;
+                const row = document.getElementById("__permrow_" + uid + "__");
+                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
+              });
+            });
+
+            // إظهار/إخفاء صف "من يظهر له" (خاص بالمتابع)
+            tbody.querySelectorAll(".ap-followerbtn").forEach(btn => {
+              btn.addEventListener("click", (e) => {
+                const uid = e.target.dataset.uid;
+                const row = document.getElementById("__followerrow_" + uid + "__");
+                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
+              });
+            });
+
+            bindPermChecklistEvents();
+            bindFollowerAssignmentEvents();
+          }
+
+          // يبني شبكة تشيك بوكس للوظائف العشرة الخاصة بمستخدم معيّن
+          function renderPermChecklist(u) {
+            const boxes = FEATURE_DEFS.map(f2 => `
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:7px 10px;">
+                <input type="checkbox" class="ap-perm-check" data-uid="${u.id}" data-key="${f2.key}" ${u.permissions[f2.key] !== false ? "checked" : ""}>
+                ${f2.label}
+              </label>
+            `).join("");
+            return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:12px;background:#fbfbfe;border-radius:10px;">${boxes}</div>`;
+          }
+
+          function bindPermChecklistEvents() {
+            document.querySelectorAll(".ap-perm-check").forEach(cb => {
+              cb.addEventListener("change", async (e) => {
+                const uid = e.target.dataset.uid;
+                const key = e.target.dataset.key;
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newPerms = Object.assign({}, u.permissions, { [key]: e.target.checked });
+                e.target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid), { permissions: newPerms });
+                  u.permissions = newPerms;
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__permrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("save permissions error:", err);
+                  alert("تعذّر حفظ الصلاحية — تحقق من صلاحيات Firestore Rules");
+                  e.target.checked = !e.target.checked;
+                } finally {
+                  e.target.disabled = false;
+                }
+              });
+            });
+          }
+
+          // يبني واجهة "من يظهر له نتائجه" الخاصة بمستخدم دوره "متابع": اختيار مدير + قطاع، واختيار مشرف
+          function renderFollowerAssignments(u) {
+            const managers = __adminUsersCache.filter(x => x.role === "manager");
+            const supervisors = __adminUsersCache.filter(x => x.role === "supervisor");
+            const managerOptions = `<option value="">اختر مديراً...</option>` + managers.map(m =>
+              `<option value="${m.id}">${m.nickname || m.email}</option>`).join("");
+            const supervisorOptions = `<option value="">اختر مشرفاً...</option>` + supervisors.map(s =>
+              `<option value="${s.id}">${s.nickname || s.email}</option>`).join("");
+            const currentManagerRows = Object.entries(u.assignedManagers || {}).map(([mid, sector]) => {
+              const m = __adminUsersCache.find(x => x.id === mid);
+              return `<div class="ap-assign-row" style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:6px 10px;margin-bottom:6px;">
+                <span style="flex:1;">🧑‍💼 ${m ? (m.nickname || m.email) : mid} ← 🏢 القطاع: <b>${sector || "—"}</b></span>
+                <button class="ap-savebtn ap-remove-manager-assign" data-uid="${u.id}" data-mid="${mid}" style="background:#fdeaea;color:#e5484d;">حذف</button>
+              </div>`;
+            }).join("") || `<div style="font-size:12px;color:#aaa;">لا يوجد مديرون مُحدَّدون بعد</div>`;
+            const currentSupervisorRows = Object.keys(u.assignedSupervisors || {}).map(sid => {
+              const s = __adminUsersCache.find(x => x.id === sid);
+              return `<div class="ap-assign-row" style="display:flex;align-items:center;gap:8px;font-size:12px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:6px 10px;margin-bottom:6px;">
+                <span style="flex:1;">🧑‍✈️ ${s ? (s.nickname || s.email) : sid} ← نتائج مجموعته الخاصة فقط</span>
+                <button class="ap-savebtn ap-remove-supervisor-assign" data-uid="${u.id}" data-sid="${sid}" style="background:#fdeaea;color:#e5484d;">حذف</button>
+              </div>`;
+            }).join("") || `<div style="font-size:12px;color:#aaa;">لا يوجد مشرفون مُحدَّدون بعد</div>`;
+            return `
+              <div style="padding:12px;background:#fbfbfe;border-radius:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+                <div>
+                  <div style="font-weight:700;font-size:13px;margin-bottom:8px;">🧑‍💼 نتائج مدير بقطاع معيّن</div>
+                  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+                    <select class="ap-assign-manager-select" data-uid="${u.id}" style="flex:1;min-width:140px;border:1.5px solid #e3e3ef;border-radius:8px;padding:6px;font-size:12px;">${managerOptions}</select>
+                    <input type="text" class="ap-assign-sector-input" data-uid="${u.id}" placeholder="اسم القطاع" style="flex:1;min-width:120px;border:1.5px solid #e3e3ef;border-radius:8px;padding:6px;font-size:12px;">
+                    <button class="ap-savebtn ap-add-manager-assign" data-uid="${u.id}">إضافة</button>
+                  </div>
+                  ${currentManagerRows}
+                </div>
+                <div>
+                  <div style="font-weight:700;font-size:13px;margin-bottom:8px;">🧑‍✈️ نتائج مشرف (مجموعته كاملة)</div>
+                  <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+                    <select class="ap-assign-supervisor-select" data-uid="${u.id}" style="flex:1;min-width:140px;border:1.5px solid #e3e3ef;border-radius:8px;padding:6px;font-size:12px;">${supervisorOptions}</select>
+                    <button class="ap-savebtn ap-add-supervisor-assign" data-uid="${u.id}">إضافة</button>
+                  </div>
+                  ${currentSupervisorRows}
+                </div>
+              </div>
+            `;
+          }
+
+          function bindFollowerAssignmentEvents() {
+            document.querySelectorAll(".ap-add-manager-assign").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const uid = e.target.dataset.uid;
+                const wrap = e.target.closest("td");
+                const sel = wrap.querySelector(".ap-assign-manager-select");
+                const input = wrap.querySelector(".ap-assign-sector-input");
+                const mid = sel.value;
+                const sector = input.value.trim();
+                if (!mid) { alert("اختر مديراً أولاً"); return; }
+                if (!sector) { alert("اكتب اسم القطاع"); return; }
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newAssigned = Object.assign({}, u.assignedManagers, { [mid]: sector });
+                try {
+                  // نحفظ التخصيص على مستند المتابع (للمرجعية)، ونكرّره أيضاً على مستند المدير نفسه (viewingFollowerUid/
+                  // viewingSector) عشان جهاز المدير يعرف مباشرة أي متابع يستمع له وأي قطاع يفلتر عليه، لحظياً
+                  await updateDoc(doc(db, "users", uid), { assignedManagers: newAssigned });
+                  await updateDoc(doc(db, "users", mid), { viewingFollowerUid: uid, viewingSector: sector, viewingMode: "sector" });
+                  u.assignedManagers = newAssigned;
+                  const mgr = __adminUsersCache.find(x => x.id === mid);
+                  if (mgr) { mgr.viewingFollowerUid = uid; mgr.viewingSector = sector; mgr.viewingMode = "sector"; }
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__followerrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("save assignedManagers error:", err);
+                  alert("تعذّر الحفظ — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+            document.querySelectorAll(".ap-remove-manager-assign").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const uid = e.target.dataset.uid;
+                const mid = e.target.dataset.mid;
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newAssigned = Object.assign({}, u.assignedManagers);
+                delete newAssigned[mid];
+                try {
+                  await updateDoc(doc(db, "users", uid), { assignedManagers: newAssigned });
+                  u.assignedManagers = newAssigned;
+                  // نمسح المتابعة اللحظية من مستند المدير بس لو لسه مرتبطة بنفس المتابع ده (تحسّبًا لو متابع تاني
+                  // عيّن نفس المدير بعد كده، فما نلغيش تعيينه هو بالغلط)
+                  const mgr = __adminUsersCache.find(x => x.id === mid);
+                  if (mgr && mgr.viewingFollowerUid === uid) {
+                    await updateDoc(doc(db, "users", mid), { viewingFollowerUid: null, viewingSector: null, viewingMode: null });
+                    mgr.viewingFollowerUid = null; mgr.viewingSector = null; mgr.viewingMode = null;
+                  }
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__followerrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("remove assignedManagers error:", err);
+                  alert("تعذّر الحذف — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+            document.querySelectorAll(".ap-add-supervisor-assign").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const uid = e.target.dataset.uid;
+                const wrap = e.target.closest("td");
+                const sel = wrap.querySelector(".ap-assign-supervisor-select");
+                const sid = sel.value;
+                if (!sid) { alert("اختر مشرفاً أولاً"); return; }
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newAssigned = Object.assign({}, u.assignedSupervisors, { [sid]: true });
+                try {
+                  await updateDoc(doc(db, "users", uid), { assignedSupervisors: newAssigned });
+                  await updateDoc(doc(db, "users", sid), { viewingFollowerUid: uid, viewingMode: "supervisorGroup" });
+                  u.assignedSupervisors = newAssigned;
+                  const sup = __adminUsersCache.find(x => x.id === sid);
+                  if (sup) { sup.viewingFollowerUid = uid; sup.viewingMode = "supervisorGroup"; }
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__followerrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("save assignedSupervisors error:", err);
+                  alert("تعذّر الحفظ — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+            document.querySelectorAll(".ap-remove-supervisor-assign").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const uid = e.target.dataset.uid;
+                const sid = e.target.dataset.sid;
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newAssigned = Object.assign({}, u.assignedSupervisors);
+                delete newAssigned[sid];
+                try {
+                  await updateDoc(doc(db, "users", uid), { assignedSupervisors: newAssigned });
+                  u.assignedSupervisors = newAssigned;
+                  const sup = __adminUsersCache.find(x => x.id === sid);
+                  if (sup && sup.viewingFollowerUid === uid) {
+                    await updateDoc(doc(db, "users", sid), { viewingFollowerUid: null, viewingMode: null });
+                    sup.viewingFollowerUid = null; sup.viewingMode = null;
+                  }
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__followerrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("remove assignedSupervisors error:", err);
+                  alert("تعذّر الحذف — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+          }
+
           renderUsers("");
           document.getElementById("__user_search__").addEventListener("input", (e) => renderUsers(e.target.value));
+          document.getElementById("__perm_search__").addEventListener("input", (e) => renderPermissionsTab(e.target.value));
 
           // ---- جدول سجل الدخول ----
           const logsTbody = document.getElementById("__logs_tbody__");
@@ -721,9 +1215,13 @@
               document.getElementById("__tab_users__").style.display = tab.dataset.tab === "users" ? "block" : "none";
               document.getElementById("__tab_logs__").style.display = tab.dataset.tab === "logs" ? "block" : "none";
               document.getElementById("__tab_chart__").style.display = tab.dataset.tab === "chart" ? "block" : "none";
+              document.getElementById("__tab_permissions__").style.display = tab.dataset.tab === "permissions" ? "block" : "none";
               if (tab.dataset.tab === "chart") {
                 const activeRange = modal.querySelector(".ap-range-btn.active");
                 renderLoginChart(activeRange ? parseInt(activeRange.dataset.range, 10) : 7);
+              }
+              if (tab.dataset.tab === "permissions") {
+                renderPermissionsTab("");
               }
             };
           });
@@ -15155,6 +15653,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 try {
                     const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
                     tx.objectStore(VEHICLES_STORE).put(vehicle);
+                    schedulePushFollowerShare();
                     return;
                 } catch (e) { console.warn('تعذر حفظ السيارة محلياً:', e); }
             }
@@ -15166,6 +15665,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     lsSaveVehiclesMap(map);
                 } catch (e) { console.warn('تعذر حفظ السيارة في localStorage:', e); }
             }
+            schedulePushFollowerShare();
         }
 
         function dbDeleteVehicleRecord(id) {
@@ -15184,6 +15684,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     tx.objectStore(VEHICLES_STORE).delete(id);
                 } catch (e) { console.warn('تعذر حذف السيارة محلياً:', e); }
             }
+            schedulePushFollowerShare();
         }
 
         function dbGetAllVehicles() {
