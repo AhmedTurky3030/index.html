@@ -15853,19 +15853,32 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         // وأي نسخة HTML مضمّنة (لو الملف ده تم تنزيله كنسخة احتياطية شاملة)
         // ===== تُستدعى مرة واحدة فور معرفة هوية المستخدم بعد تسجيل الدخول (من سكريبت المصادقة)، فتعيد
         // تحميل كل التخزين المحلي الخاص بهذا الحساب تحديداً (السيارات + الصورة الشخصية + إعدادات الوقود) =====
+        // ===== إصلاح جوهري: يوجد أيضاً استدعاء احتياطي بـ uid=null بعد 3 ثوانٍ من تحميل الصفحة (سطر أسفل
+        // مستمع DOMContentLoaded) كـ"خطة بديلة" لو تسجيل الدخول تأخر لأي سبب (مثال: بطء الشبكة مع Firestore).
+        // المشكلة: لو تسجيل الدخول الحقيقي أخذ أكثر من 3 ثوانٍ (شائع مع اتصال بطيء)، الاستدعاءان بيشتغلوا
+        // الاثنين، وكل واحد بيفتح IndexedDB ويقرأ بياناته بشكل غير متزامن (async) - فلو الاستدعاء الأول (بدون
+        // uid، وبالتالي بياخد قاعدة بيانات فارغة/مختلفة) اتأخر في حل الـ Promises بتاعته لأي سبب وخلص بعد
+        // الاستدعاء الثاني (الصحيح، بالـ uid الحقيقي)، فهو اللي بيكسب السباق ويعيد رسم الشاشة ببياناته هو -
+        // فتظهر بيانات قديمة أو فاضية للمستخدم، ولو حصل ده فور عمل حذف، بيبان وكأن "الحذف اتلغى/البيانات رجعت".
+        // الحل: كل استدعاء لـ initFleetStorage بياخد رقم تسلسلي فريد (توكن)، ولو وصل استدعاء أحدث قبل ما
+        // القديم يخلص، القديم يوقف فوراً في أي نقطة توقف ولا يلمس vehiclesStore ولا يعيد رسم الشاشة إطلاقاً =====
+        let __fleetStorageInitToken = 0;
         window.initUserScopedStorage = function(uid) {
             window.__appUid = uid || null;
-            initFleetStorage();
+            const myToken = ++__fleetStorageInitToken;
+            initFleetStorage(myToken);
             if (typeof loadProfilePhoto === 'function') loadProfilePhoto();
             if (typeof loadFuelSettings === 'function') loadFuelSettings();
         };
 
-        async function initFleetStorage() {
+        async function initFleetStorage(myToken) {
             fleetDB = await openFleetDB();
+            if (myToken !== __fleetStorageInitToken) return; // ===== سبقنا استدعاء أحدث، نوقف فوراً =====
             if (!fleetDB) { useLocalStorageFallback = isLocalStorageAvailable(); }
             const statusEl = document.getElementById('storageStatus');
 
             const stored = await dbGetAllVehicles();
+            if (myToken !== __fleetStorageInitToken) return; // ===== سبقنا استدعاء أحدث، نوقف فوراً =====
             stored.forEach(v => { vehiclesStore[v.id] = v; });
 
             // ===== إصلاح مهم: النسخة المضمّنة داخل ملف الـ HTML (لو الملف اتحمّل كنسخة احتياطية شاملة) كانت
@@ -15885,6 +15898,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 try {
                     const seed = JSON.parse(embedded.textContent);
                     await importVehiclesData(seed);
+                    if (myToken !== __fleetStorageInitToken) return; // ===== سبقنا استدعاء أحدث، نوقف فوراً =====
                 } catch (e) { console.warn('تعذر تحميل النسخة المضمّنة:', e); }
                 try { window.localStorage.setItem(EMBEDDED_SEED_FLAG_KEY, '1'); } catch (e) { /* تجاهل */ }
             }
@@ -15895,6 +15909,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             });
 
             const regFromDb = await dbGetSupervisorsRegistry();
+            if (myToken !== __fleetStorageInitToken) return; // ===== سبقنا استدعاء أحدث، نوقف فوراً =====
             regFromDb.forEach(name => registerSupervisorName(name));
             Object.values(vehiclesStore).forEach(v => registerSupervisorName(v.supervisorName));
 
