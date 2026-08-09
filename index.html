@@ -15327,26 +15327,46 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             });
         }
 
+        // ===== إصلاح: هذه الدالة كانت "أطلق ولا تنتظر" (fire-and-forget) - تبدأ معاملة IndexedDB ولا تتأكد
+        // أبداً من نجاحها فعلياً (لا يوجد أي onerror/oncomplete). في بعض المتصفحات/الأوضاع (تصفح خاص، مساحة تخزين
+        // ممتلئة، حظر مؤقت لقاعدة البيانات...) قد تفشل المعاملة بصمت دون أي رسالة خطأ، فتبدو العملية "ناجحة" في
+        // الواجهة بينما لم تُحفظ فعلياً على القرص - وهذا يفسّر مباشرة سبب عودة بيانات محذوفة بعد الريفريش. الآن
+        // الدالة تُرجع Promise يُحسم فقط بعد تأكد نجاح/فشل المعاملة فعلياً (tx.oncomplete / tx.onerror) =====
         function dbPutVehicle(vehicle) {
-            if (fleetDB) {
-                try {
-                    const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
-                    tx.objectStore(VEHICLES_STORE).put(vehicle);
-                    if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
-                    return;
-                } catch (e) { console.warn('تعذر حفظ السيارة محلياً:', e); }
-            }
-            if (useLocalStorageFallback) {
-                try {
-                    const map = lsGetVehiclesMap();
-                    // نحفظ بصيغة JSON آمنة (بنفس منطق تصدير/استيراد النسخ الاحتياطية) حتى تُحفظ التواريخ بشكل صحيح كنصوص ISO
-                    map[vehicle.id] = serializeVehicleForExport(vehicle);
-                    lsSaveVehiclesMap(map);
-                } catch (e) { console.warn('تعذر حفظ السيارة في localStorage:', e); }
-            }
-            if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+            return new Promise((resolve) => {
+                if (fleetDB) {
+                    try {
+                        const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
+                        tx.objectStore(VEHICLES_STORE).put(vehicle);
+                        tx.oncomplete = () => resolve(true);
+                        tx.onerror = () => { console.error('فشلت معاملة حفظ السيارة في IndexedDB:', tx.error); resolve(false); };
+                        tx.onabort = () => { console.error('تم إلغاء معاملة حفظ السيارة في IndexedDB:', tx.error); resolve(false); };
+                        if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+                        return;
+                    } catch (e) {
+                        console.warn('تعذر حفظ السيارة محلياً:', e);
+                        resolve(false);
+                        return;
+                    }
+                }
+                if (useLocalStorageFallback) {
+                    try {
+                        const map = lsGetVehiclesMap();
+                        // نحفظ بصيغة JSON آمنة (بنفس منطق تصدير/استيراد النسخ الاحتياطية) حتى تُحفظ التواريخ بشكل صحيح كنصوص ISO
+                        map[vehicle.id] = serializeVehicleForExport(vehicle);
+                        lsSaveVehiclesMap(map);
+                        resolve(true);
+                    } catch (e) { console.warn('تعذر حفظ السيارة في localStorage:', e); resolve(false); }
+                } else {
+                    resolve(false);
+                }
+                if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+            });
         }
 
+        // ===== نفس الإصلاح: تُرجع الآن Promise يُحسم فقط بعد تأكد نجاح/فشل الحذف الفعلي من IndexedDB، بدل
+        // افتراض النجاح فوراً بدون أي تأكيد. لو فشلت المعاملة (tx.onerror/onabort) يُسجَّل خطأ واضح في الـ
+        // console بدل الفشل الصامت الذي كان يجعل السيارة "تبدو محذوفة" في الواجهة بينما تعود بعد الريفريش =====
         function dbDeleteVehicleRecord(id) {
             // ===== نحذف دايماً من الـ localStorage (لو موجودة نسخة قديمة فيها) حتى لو IndexedDB هي المصدر
             // النشط حالياً، لضمان عدم بقاء أي نسخة "كاش" قديمة للبيانات المحذوفة ممكن ترجع تظهر لاحقاً =====
@@ -15357,13 +15377,39 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     lsSaveVehiclesMap(map);
                 }
             } catch (e) { /* تجاهل */ }
-            if (fleetDB) {
+            return new Promise((resolve) => {
+                if (fleetDB) {
+                    try {
+                        const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
+                        tx.objectStore(VEHICLES_STORE).delete(id);
+                        tx.oncomplete = () => resolve(true);
+                        tx.onerror = () => { console.error('فشلت معاملة حذف السيارة من IndexedDB:', tx.error); resolve(false); };
+                        tx.onabort = () => { console.error('تم إلغاء معاملة حذف السيارة من IndexedDB:', tx.error); resolve(false); };
+                        if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+                        return;
+                    } catch (e) {
+                        console.warn('تعذر حذف السيارة محلياً:', e);
+                        resolve(false);
+                        return;
+                    }
+                }
+                if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+                resolve(true);
+            });
+        }
+
+        // ===== دالة تحقق جديدة: تقرأ مباشرة من IndexedDB للتأكد الفعلي من زوال السجل بعد الحذف، بدل الوثوق
+        // بأن المعاملة نجحت فقط - تُستخدم لإظهار تحذير واضح للمستخدم لو الحذف لم يُحفظ فعلياً بشكل دائم =====
+        function dbVehicleExists(id) {
+            return new Promise((resolve) => {
+                if (!fleetDB) { resolve(false); return; }
                 try {
-                    const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
-                    tx.objectStore(VEHICLES_STORE).delete(id);
-                } catch (e) { console.warn('تعذر حذف السيارة محلياً:', e); }
-            }
-            if (typeof window.schedulePushFollowerShare === 'function') window.schedulePushFollowerShare();
+                    const tx = fleetDB.transaction(VEHICLES_STORE, 'readonly');
+                    const req = tx.objectStore(VEHICLES_STORE).get(id);
+                    req.onsuccess = () => resolve(!!req.result);
+                    req.onerror = () => resolve(false);
+                } catch (e) { resolve(false); }
+            });
         }
 
         function dbGetAllVehicles() {
@@ -19436,7 +19482,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         let pendingDeleteVehicle = null;
         let pendingDeleteId = null;
         let pendingDeleteTimer = null;
-        function deleteVehicle(vehicleId) {
+        async function deleteVehicle(vehicleId) {
             const v = vehiclesStore[vehicleId];
             if (!v) return;
             if (!confirm(`هل أنت متأكد من حذف سيارة "${v.driverName} - ${v.vehicleNumber}"؟`)) return;
@@ -19449,11 +19495,19 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             delete vehiclesStore[vehicleId];
             if (currentVehicleId === vehicleId) currentVehicleId = null;
 
-            // ===== الحذف الفعلي من قاعدة البيانات يحصل فوراً هنا (مش بعد 8 ثوانٍ)، حتى لو المستخدم عمل ريفريش
-            // فوراً بعد الضغط على حذف، تكون البيانات اتشالت فعلاً من التخزين الدائم ومترجعش تاني =====
-            dbDeleteVehicleRecord(vehicleId);
-
             renderVehiclesDashboard();
+
+            // ===== الحذف الفعلي من قاعدة البيانات يحصل فوراً هنا (مش بعد 8 ثوانٍ)، حتى لو المستخدم عمل ريفريش
+            // فوراً بعد الضغط على حذف، تكون البيانات اتشالت فعلاً من التخزين الدائم ومترجعش تاني. الآن ننتظر
+            // (await) تأكيد نجاح الحذف فعلياً، ولو فشل نتحقق ونحذّر المستخدم بدل الوثوق الصامت بالنجاح =====
+            const ok = await dbDeleteVehicleRecord(vehicleId);
+            if (!ok) {
+                const stillThere = await dbVehicleExists(vehicleId);
+                if (stillThere) {
+                    console.error('فشل حذف السيارة نهائياً من التخزين الدائم:', vehicleId);
+                    showToast('⚠️ تم الحذف من الشاشة، لكن قد لا يُحفظ بشكل دائم في هذا المتصفح - جرّب مرة أخرى أو تأكد أنك لست في وضع التصفح الخاص', 'error');
+                }
+            }
 
             showUndoBar(`🗑️ تم حذف سيارة "${v.driverName} - ${v.vehicleNumber}"`, undoDeleteVehicle, 8000);
 
@@ -19483,7 +19537,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         // فوري من قاعدة البيانات (بدون انتظار 8 ثوانٍ) لنفس سبب منع رجوع البيانات بعد ريفريش سريع =====
         let pendingBulkDeleteVehicles = null; // آخر دفعة سيارات محذوفة لسه في فترة التراجع
         let pendingBulkDeleteTimer = null;
-        function deleteFilteredVehiclesFromDashboard() {
+        async function deleteFilteredVehiclesFromDashboard() {
             const vehicles = getCurrentDashboardFilteredVehicles();
             if (vehicles.length === 0) {
                 showToast('⚠️ لا توجد سيارات مطابقة للفلتر الحالي لحذفها', 'error');
@@ -19513,10 +19567,24 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             vehicles.forEach(v => {
                 delete vehiclesStore[v.id];
                 if (currentVehicleId === v.id) currentVehicleId = null;
-                // ===== حذف فعلي فوري من قاعدة البيانات لكل سيارة، بدون انتظار 8 ثوانٍ =====
-                dbDeleteVehicleRecord(v.id);
             });
             renderVehiclesDashboard();
+
+            // ===== حذف فعلي فوري من قاعدة البيانات لكل سيارة، بدون انتظار 8 ثوانٍ - وننتظر (await) تأكيد
+            // نجاح كل عملية حذف فعلياً بدل الوثوق الصامت بأن المعاملة نجحت. لو أي سيارة فشل حذفها فعلياً
+            // نتحقق من IndexedDB مباشرة ونحذّر المستخدم بوضوح بدل ما يكتشف رجوعها بعد الريفريش فقط =====
+            const results = await Promise.all(vehicles.map(v => dbDeleteVehicleRecord(v.id)));
+            const failedVehicles = [];
+            for (let i = 0; i < vehicles.length; i++) {
+                if (!results[i]) {
+                    const stillThere = await dbVehicleExists(vehicles[i].id);
+                    if (stillThere) failedVehicles.push(vehicles[i]);
+                }
+            }
+            if (failedVehicles.length > 0) {
+                console.error('فشل حذف السيارات التالية نهائياً من التخزين الدائم:', failedVehicles.map(v => v.id));
+                showToast(`⚠️ تم الحذف من الشاشة، لكن ${failedVehicles.length} سيارة قد لا تُحفظ حذفها بشكل دائم في هذا المتصفح - جرّب مرة أخرى أو تأكد أنك لست في وضع التصفح الخاص`, 'error');
+            }
 
             showUndoBar(`🗑️ تم حذف ${vehicles.length} مندوب/سيارة`, undoDeleteFilteredVehicles, 8000);
 
