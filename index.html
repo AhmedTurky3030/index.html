@@ -46,8 +46,17 @@
         const overlay = document.getElementById("__auth_overlay__");
         if (overlay) overlay.remove();
       }
-      // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
-      getOverlay();
+      // ===== وضع "قراءة فقط" مُصدَّر: لو الصفحة دي ملف HTML مُحمَّل (فيه __EMBEDDED_SHARE_DATA__ مُضمَّن
+      // مسبقاً) أو رابط مشاركة ذاتي الاكتفاء (#d=...)، فالبيانات already موجودة جوه الصفحة/الرابط نفسه ولا
+      // معنى إطلاقاً لتسجيل دخول Firebase هنا؛ الشخص المُستلم للملف/الرابط مفروض يشوف النتائج فوراً بدون أي
+      // بوابة دخول. عشان كده نتجاهل كل بوابة تسجيل الدخول دي تماماً في الحالة دي (مفيش overlay ولا فورم دخول) =====
+      const __isSharedReadOnlyFile = (typeof window.__EMBEDDED_SHARE_DATA__ !== 'undefined' && !!window.__EMBEDDED_SHARE_DATA__)
+        || (window.location.hash && window.location.hash.startsWith('#d='));
+
+      if (!__isSharedReadOnlyFile) {
+        // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
+        getOverlay();
+      }
 
       // ===== توليد معرف ثابت للجهاز (Device ID): بيتخزن في localStorage (مش متأثر بإجبار تسجيل الخروج
       // اللي بيحصل تحت)، فيفضل نفس المعرف لنفس الجهاز حتى لو المستخدم قفل المتصفح وفتحه تاني. ده بيسمحلنا
@@ -170,6 +179,7 @@
       // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
       // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
       // أو إغلاق وفتح للصفحة يفرض تسجيل دخول جديد دايماً، ولا يبقى فيه جلسة محفوظة تلقائياً في المتصفح =====
+      if (!__isSharedReadOnlyFile) {
       signOut(auth).catch(() => { /* تجاهل: مفيش جلسة أصلاً */ }).finally(() => {
         setPersistence(auth, inMemoryPersistence).then(() => {
           onAuthStateChanged(auth, async (user) => {
@@ -223,6 +233,7 @@
           });
         });
       });
+      }
       function showLoginForm() {
         const overlay = getOverlay();
         overlay.innerHTML = `
@@ -5744,13 +5755,22 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             // (كل السيارات + المشرفين) حتى يقدر من يفتح الملف يستخدم نفس "الاختيار السريع" لتصفح أي سيارة/مشرف آخر من داخل
             // نفس الملف بدون إنترنت - بإعادة استخدام نفس دالة buildExportPayload المستخدمة أصلاً في نسخة "السيارات الاحتياطية"
             if (includeFullTrack && typeof vehiclesStore !== 'undefined' && Object.keys(vehiclesStore).length > 0) {
-                // نقتصر على نفس مجموعة السيارات الظاهرة فعلياً حالياً في شاشة النتائج (نفس فلتر لوحة السيارات/
-                // مجموعة المشرف المختارة عبر dashboardFilteredVehicleIds)، بدل تضمين كل السيارات وكل المشرفين
-                // دائماً - حتى يعرض ملف الـ HTML المُحمَّل، عند فتحه في وضع القراءة فقط، نفس النتائج بالضبط التي
-                // كانت ظاهرة وقت التحميل ولا أكثر
-                const idsFilter = (typeof dashboardFilteredVehicleIds !== 'undefined' && dashboardFilteredVehicleIds instanceof Set && dashboardFilteredVehicleIds.size > 0)
-                    ? dashboardFilteredVehicleIds
-                    : null;
+                // نقتصر على نفس مجموعة السيارات الظاهرة فعلياً حالياً في شاشة النتائج، بدل تضمين كل السيارات
+                // وكل المشرفين دائماً - حتى يعرض ملف الـ HTML المُحمَّل، عند فتحه في وضع القراءة فقط، نفس
+                // النتائج بالضبط التي كانت ظاهرة وقت التحميل ولا أكثر. النطاق ده بيتحدد على مرحلتين تماماً
+                // زي ما بيحصل في populateAnalysisQuickSwitch(): (1) فلتر لوحة السيارات (dashboardFilteredVehicleIds)
+                // كأساس، ثم (2) فلتر "مجموعة المشرف" الخاص بشاشة النتائج نفسها (analysisSupervisorSelect) لو
+                // كان محدَّداً على مشرف بعينه - فلو المستخدم مثلاً مصفّي على "كل المناديب" (بدون مشرف محدد) يُصدَّر
+                // كل من ضمن نطاق لوحة السيارات، ولو مصفّي على مشرف واحد يُصدَّر مناديب هذا المشرف فقط دون غيره
+                let scopedVehicles = Object.values(vehiclesStore);
+                if (typeof dashboardFilteredVehicleIds !== 'undefined' && dashboardFilteredVehicleIds instanceof Set && dashboardFilteredVehicleIds.size > 0) {
+                    scopedVehicles = scopedVehicles.filter(v => dashboardFilteredVehicleIds.has(v.id));
+                }
+                const analysisSupSel = document.getElementById('analysisSupervisorSelect');
+                if (analysisSupSel && analysisSupSel.value) {
+                    scopedVehicles = scopedVehicles.filter(v => (v.supervisorName || 'غير محدد') === analysisSupSel.value);
+                }
+                const idsFilter = scopedVehicles.length > 0 ? new Set(scopedVehicles.map(v => v.id)) : null;
                 shareData.vehiclesFleet = buildExportPayload(idsFilter);
             }
             Object.keys(allDaysData).forEach(dayId => {
