@@ -4074,7 +4074,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     </label>
                 </div>
                 <div class="comparison-box" id="comparisonBoxA" style="flex:1;min-width:260px;">
-                    <h3 style="background:#3f51b5;color:#fff;padding:7px 12px;border-radius:8px;margin:0 0 8px;font-size:13px;">🅰️ المجموعة الأولى</h3>
+                    <h3 style="background:#3f51b5;color:#fff;padding:7px 12px;border-radius:8px;margin:0 0 8px;font-size:13px;">🅰️ الفترة الأولى</h3>
                     <div class="comparison-box-body" style="padding:0 4px 4px;">
                         <div class="comparison-period-row">
                             <button type="button" class="filter-reset" onclick="clearComparisonDateRange('A')">📅 مسح الفترة</button>
@@ -4116,7 +4116,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                     </div>
                 </div>
                 <div class="comparison-box" id="comparisonBoxB" style="flex:1;min-width:260px;">
-                    <h3 style="background:#00897b;color:#fff;padding:7px 12px;border-radius:8px;margin:0 0 8px;font-size:13px;">🅱️ المجموعة الثانية</h3>
+                    <h3 style="background:#00897b;color:#fff;padding:7px 12px;border-radius:8px;margin:0 0 8px;font-size:13px;">🅱️ الفترة الثانية</h3>
                     <div class="comparison-box-body" style="padding:0 4px 4px;">
                         <div class="comparison-period-row">
                             <button type="button" class="filter-reset" onclick="clearComparisonDateRange('B')">📅 مسح الفترة</button>
@@ -17187,8 +17187,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             const stopTimesLabel = isMultiDay ? '📊 متوسط أوقات الوقفات' : '⏱️ إجمالي أوقات الوقفات';
             const headCells = [
                 '#', '👤 اسم المندوب', '🗓️ عدد أيام المسار', '🗺️ اسم المنطقة',
-                '✅ عدد الزيارات داخل الحدود العامة', '📊 نسبة الالتزام بالحدود العامة',
-                '📅 عدد الزيارات داخل الحدود اليومية', '📊 نسبة الالتزام بالحدود اليومية',
+                '✅ عدد الزيارات داخل الحدود العامة', '📊 نسبة تغطية الحدود العامة',
+                '📅 عدد الزيارات داخل الحدود اليومية', '📊 نسبة تغطية الحدود اليومية',
                 '📈 نسبة الزيارات اليومية من العامة',
                 `${stopTimesLabel} (الحدود العامة)`, `${stopTimesLabel} (الحدود اليومية)`,
                 '🧾 عدد الفواتير'
@@ -19262,8 +19262,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                         <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
                             <thead><tr style="background:#eef1fd;">
                                 <th style="padding:7px 10px;text-align:right;">المؤشر</th>
-                                ${groupHeaderCell('🅰️', 'المجموعة الأولى', labelA, '#3f51b5')}
-                                ${groupHeaderCell('🅱️', 'المجموعة الثانية', labelB, '#00897b')}
+                                ${groupHeaderCell('🅰️', 'الفترة الأولى', labelA, '#3f51b5')}
+                                ${groupHeaderCell('🅱️', 'الفترة الثانية', labelB, '#00897b')}
                                 <th style="padding:7px 10px;">المتفوق</th>
                             </tr></thead>
                             <tbody>
@@ -19471,7 +19471,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             const selLabelA = (lastComparisonMeta.A && lastComparisonMeta.A.selectionLabel) || '—';
             const selLabelB = (lastComparisonMeta.B && lastComparisonMeta.B.selectionLabel) || '—';
             const summaryAoa = [
-                ['المؤشر', 'المجموعة الأولى (A)', 'المجموعة الثانية (B)'],
+                ['المؤشر', 'الفترة الأولى (A)', 'الفترة الثانية (B)'],
                 ['المُختار', selLabelA, selLabelB],
                 ['عدد المناديب', sumA.repsCount, sumB.repsCount],
                 ['متوسط مؤشر الأداء المركّب %', sumA.avgScore, sumB.avgScore],
