@@ -6369,32 +6369,33 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         // ===== نسبة زيارات المندوب للعملاء الموجودين داخل حدود اليوم (الحدود الفرعية اليومية) فقط =====
         // بتحسب من إجمالي العملاء الواقعين داخل حدود أي يوم من الأيام النشطة حالياً، كام منهم فعلاً تمت زيارته
         function calculateDailyBoundaryClientsStats() {
-            let total = 0, visited = 0;
             if (!clientsData || clientsData.length === 0) return { total: 0, visited: 0, percentage: 0 };
-
-            const activeWeekdays = new Set();
-            Object.keys(allDaysData).forEach(dayId => {
-                if (!isDayVisibleForStats(dayId)) return;
-                const day = allDaysData[dayId];
-                if (day && day.weekday) activeWeekdays.add(day.weekday);
-            });
 
             const hasAnyBoundary = (polygonCoordinates.length > 0 || Object.keys(polygonDailyGroups).length > 0);
             if (!hasAnyBoundary) return { total: 0, visited: 0, percentage: 0 };
 
-            clientsData.forEach((client, idx) => {
-                let insideDaily = false;
-                if (activeWeekdays.size > 0) {
-                    activeWeekdays.forEach(wd => {
-                        if (!insideDaily && isPointInsidePolygons(client.lat, client.lon, wd)) insideDaily = true;
-                    });
-                } else {
-                    insideDaily = isPointInsidePolygons(client.lat, client.lon, null);
-                }
-                if (insideDaily) {
+            // ===== إصلاح: نحسب لكل يوم ظاهر على حدة (بحدوده اليومية الخاصة به فقط، وبحالة زيارة كل عميل في
+            // هذا اليوم بالذات عبر clientVisitDays)، ثم نجمع "total" و"visited" تراكمياً عبر كل الأيام الظاهرة -
+            // بنفس منطق التجميع الإضافي (الجمع يوماً بيوم) المستخدم أصلاً في مربع "وقفات داخل الحدود اليومية".
+            // الطريقة القديمة كانت تعامل كل الأيام المختارة كوحدة واحدة: تعتبر العميل "داخل الحدود اليومية" لو
+            // وقع داخل حدود أي يوم من الأيام المختارة (اتحاد/OR) وتعتبره "تمت زيارته" لو تمت زيارته في أي وقت
+            // خلال كل الفترة المختارة (حالة عامة واحدة clientVisitedStatus)، فكانت النتيجة عند اختيار أكثر من
+            // يوم رقماً غير مرتبط بمجموع كل يوم على حدة (وأحياناً أكبر منه بوضوح)، وهو ما كان يظهر للمستخدم كرقم
+            // غير صحيح وغير دقيق. الحساب الجديد يجعل الناتج عند اختيار أكثر من يوم = مجموع نفس الرقم الذي كان
+            // سيظهر لو تم اختيار كل يوم بمفرده، تماماً كما يحدث بالفعل مع مربع "وقفات داخل الحدود اليومية" =====
+            const visibleDayIds = Object.keys(allDaysData).filter(dayId => isDayVisibleForStats(dayId));
+            if (visibleDayIds.length === 0) return { total: 0, visited: 0, percentage: 0 };
+
+            let total = 0, visited = 0;
+            visibleDayIds.forEach(dayId => {
+                const day = allDaysData[dayId];
+                const wd = (day && day.weekday) ? day.weekday : null;
+                clientsData.forEach((client, idx) => {
+                    if (!isPointInsidePolygons(client.lat, client.lon, wd)) return;
                     total++;
-                    if (clientVisitedStatus[idx]) visited++;
-                }
+                    const visitedDaysForClient = clientVisitDays[idx];
+                    if (visitedDaysForClient && visitedDaysForClient.has(dayId)) visited++;
+                });
             });
 
             const percentage = total > 0 ? Math.round((visited / total) * 100) : 0;
@@ -16950,26 +16951,67 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             const hasAnyBoundary = generalRings.length > 0 || Object.keys(dailyGroupsMap).length > 0;
             if (!hasAnyBoundary) return 0;
 
-            const activeWeekdays = new Set();
-            Object.values(v.allDaysData || {}).forEach(day => {
-                if (day && day.weekday) activeWeekdays.add(day.weekday);
-            });
+            // ===== إصلاح (نفس إصلاح calculateDailyBoundaryClientsStats): نحسب لكل يوم ضمن v.allDaysData على
+            // حدة (بحدوده اليومية الخاصة به فقط)، ونعتمد على أيام الزيارة الفعلية لكل عميل (v.clientVisitDays)
+            // بدل حالة "تمت الزيارة" العامة الواحدة (v.clientVisitedStatus) التي قد تعكس تاريخ السيارة الكامل
+            // حتى لو تم تضييق التقرير على أيام أقل عبر فلتر "فلترة حسب اليوم" في شاشة النتائج. نجمع النتيجة
+            // تراكمياً عبر أيام v.allDaysData الممرَّرة (وهي بالفعل مُقيَّدة مسبقاً بنفس فلتر اليوم الحالي عبر
+            // getVehicleFilteredForReport)، بحيث لا يظهر رقم أكبر من مجموع كل يوم على حدة عند اختيار أكثر من يوم =====
+            const visitDaysMap = v.clientVisitDays || {};
+            const hasPerDayVisitData = Object.keys(visitDaysMap).length > 0;
+            const toDayIdArray = (daysSet) => {
+                if (!daysSet) return [];
+                if (daysSet instanceof Set) return Array.from(daysSet);
+                if (Array.isArray(daysSet)) return daysSet;
+                return Object.values(daysSet);
+            };
 
             let visited = 0;
-            clients.forEach((client, idx) => {
-                let insideDaily = false;
-                if (activeWeekdays.size > 0) {
-                    activeWeekdays.forEach(wd => {
-                        if (insideDaily) return;
-                        const dayRings = (dailyGroupsMap[wd] && dailyGroupsMap[wd].length > 0) ? dailyGroupsMap[wd] : generalRings;
-                        if (dayRings.length > 0 && isInsideAnyRing(client.lat, client.lon, dayRings)) insideDaily = true;
-                    });
-                } else if (generalRings.length > 0) {
-                    insideDaily = isInsideAnyRing(client.lat, client.lon, generalRings);
-                }
-                if (insideDaily && v.clientVisitedStatus && v.clientVisitedStatus[idx]) visited++;
+            Object.entries(v.allDaysData || {}).forEach(([dayId, day]) => {
+                if (!day) return;
+                const wd = day.weekday || null;
+                const dayRings = (wd && dailyGroupsMap[wd] && dailyGroupsMap[wd].length > 0) ? dailyGroupsMap[wd] : generalRings;
+                if (!dayRings || dayRings.length === 0) return;
+                clients.forEach((client, idx) => {
+                    if (!isInsideAnyRing(client.lat, client.lon, dayRings)) return;
+                    let visitedThisDay;
+                    if (hasPerDayVisitData) {
+                        visitedThisDay = toDayIdArray(visitDaysMap[idx]).includes(dayId);
+                    } else {
+                        // لا تتوفر بيانات أيام الزيارة التفصيلية (مثلاً بعد استيراد نسخة احتياطية قديمة) - نرجع لأفضل تقدير متاح
+                        visitedThisDay = !!(v.clientVisitedStatus && v.clientVisitedStatus[idx]);
+                    }
+                    if (visitedThisDay) visited++;
+                });
             });
             return visited;
+        }
+
+        // ===== يحسب عدد العملاء الذين تمت زيارتهم فعلياً ضمن نطاق الأيام المعروضة/المُصفّاة فقط لسيارة معيّنة
+        // (v.allDaysData بعد أي تضييق مسبق بفلتر الأيام)، بدل الاعتماد على v.clientVisitedStatus التي قد تعكس
+        // تاريخ السيارة الكامل المحفوظ حتى لو تم تضييق التقرير على أيام أقل - نفس سبب الخطأ الموصوف أعلاه فيما
+        // يخص "عدد الزيارات داخل الحدود اليومية"، لكن هنا لعمود "عدد الزيارات داخل الحدود العامة" =====
+        function computeVehicleVisitedClientsForDisplayedDays(v) {
+            const clients = v.clientsData || [];
+            if (clients.length === 0) return 0;
+            const displayedDayIds = new Set(Object.keys(v.allDaysData || {}));
+            if (displayedDayIds.size === 0) return 0;
+            const visitDaysMap = v.clientVisitDays || {};
+            const hasPerDayVisitData = Object.keys(visitDaysMap).length > 0;
+            if (!hasPerDayVisitData) {
+                // لا تتوفر بيانات أيام الزيارة التفصيلية (مثلاً بعد استيراد نسخة احتياطية قديمة) - نرجع لأفضل تقدير متاح
+                return Object.values(v.clientVisitedStatus || {}).filter(Boolean).length;
+            }
+            let count = 0;
+            clients.forEach((client, idx) => {
+                const daysSet = visitDaysMap[idx];
+                if (!daysSet) return;
+                const iterable = daysSet instanceof Set ? daysSet : (Array.isArray(daysSet) ? daysSet : Object.values(daysSet));
+                for (const d of iterable) {
+                    if (displayedDayIds.has(d)) { count++; break; }
+                }
+            });
+            return count;
         }
 
         // ===== يحسب إجمالي مدة الوقفات (بالثواني) داخل الحدود العامة، وداخل الحدود اليومية على حدة، لسيارة
@@ -17019,7 +17061,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         function computeSupervisorGroupReportRows(vehicles) {
             return vehicles.map(v => {
                 const boundaryCoverage = computeVehicleBoundaryCoverage(v);
-                const generalVisited = Object.values(v.clientVisitedStatus || {}).filter(Boolean).length;
+                // ===== إصلاح: نستخدم computeVehicleVisitedClientsForDisplayedDays بدل الاعتماد المباشر على
+                // v.clientVisitedStatus، لأن هذه الأخيرة قد تعكس تاريخ السيارة الكامل المحفوظ حتى لو تم تضييق
+                // نطاق التقرير على أيام أقل عبر فلتر "فلترة حسب اليوم" في شاشة النتائج (v هنا نسخة مُصفّاة عبر
+                // getVehicleFilteredForReport) =====
+                const generalVisited = computeVehicleVisitedClientsForDisplayedDays(v);
                 const dailyVisited = computeVehicleDailyVisitedClientsCount(v);
                 const dailyFromGeneralPct = generalVisited > 0 ? Math.round((dailyVisited / generalVisited) * 100) : 0;
                 const stopSeconds = computeVehicleStopSecondsByBoundary(v);
@@ -18864,9 +18910,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             // نحصر الفواتير (الحقيقية/الوهمية) وقيمة البيع فقط في الأيام "المرفوعة/المسجلة" فعلياً لهذه السيارة
             // (أي الأيام الموجودة ضمن allDaysData) والواقعة ضمن الفترة المحددة - وليس أي فاتورة يقع تاريخها
             // نظرياً داخل الفترة حتى لو لم يكن لها يوم مسار مرفوع فعلياً في نفس التاريخ
-            const recordedDays = Object.values(v.allDaysData || {}).filter(d => d && isDateKeyInComparisonRange(d.dateKey, dateFrom, dateTo));
-            const recordedDayKeys = new Set(recordedDays.map(d => d.dateKey).filter(Boolean));
-            const hasUndatedRecordedDay = recordedDays.some(d => !d.dateKey);
+            const recordedDayEntries = Object.entries(v.allDaysData || {}).filter(([, d]) => d && isDateKeyInComparisonRange(d.dateKey, dateFrom, dateTo));
+            const recordedDayIds = new Set(recordedDayEntries.map(([dayId]) => dayId));
+            const recordedDayKeys = new Set(recordedDayEntries.map(([, d]) => d.dateKey).filter(Boolean));
+            const hasUndatedRecordedDay = recordedDayEntries.some(([, d]) => !d.dateKey);
 
             const invoices = (v.invoicesData || []).filter(inv => {
                 if (!inv.invoiceDate) return hasUndatedRecordedDay;
@@ -18880,7 +18927,24 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
             // (v.proximityRange) المستخدم في باقي أدوات البرنامج
             const proximityRangeV = (typeof rangeMeters === 'number' && rangeMeters >= 0) ? rangeMeters : 15;
             const normCode = s => String(s || '').trim().toLowerCase();
-            const clientVisited = v.clientVisitedStatus || {};
+            // ===== إصلاح: كانت هذه الدالة تعتمد على v.clientVisitedStatus مباشرة، وهي حالة "تمت الزيارة" عامة
+            // واحدة قد تعكس تاريخ السيارة الكامل المحفوظ (كل الأيام) بغض النظر عن فترة (من - إلى) المحددة هنا
+            // لتقرير المقارنة تحديداً - فكانت فاتورة قديمة/جديدة تُصنَّف "حقيقية" لمجرد زيارة العميل يوماً ما خارج
+            // الفترة المقارَنة أصلاً. الحل: نتحقق من زيارة العميل ضمن نفس أيام الفترة المحددة فقط (recordedDayIds)
+            // عبر v.clientVisitDays (أيام الزيارة الفعلية لكل عميل) بدل الحالة العامة =====
+            const visitDaysMap = v.clientVisitDays || {};
+            const hasPerDayVisitData = Object.keys(visitDaysMap).length > 0;
+            const isClientVisitedInRange = (idx) => {
+                if (hasPerDayVisitData) {
+                    const daysSet = visitDaysMap[idx];
+                    if (!daysSet) return false;
+                    const iterable = daysSet instanceof Set ? daysSet : (Array.isArray(daysSet) ? daysSet : Object.values(daysSet));
+                    for (const d of iterable) { if (recordedDayIds.has(d)) return true; }
+                    return false;
+                }
+                // لا تتوفر بيانات أيام الزيارة التفصيلية (مثلاً بعد استيراد نسخة احتياطية قديمة) - نرجع لأفضل تقدير متاح
+                return !!(v.clientVisitedStatus && v.clientVisitedStatus[idx]);
+            };
 
             let fakeCount = 0, realCount = 0, salesValue = 0;
             invoices.forEach(inv => {
@@ -18901,7 +18965,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
                 const clientCoord = hasEmbeddedClientLoc ? [inv.clientLat, inv.clientLon] : (matchedIdx >= 0 ? [clients[matchedIdx].lat, clients[matchedIdx].lon] : null);
                 const distance = (clientCoord && typeof inv.lat === 'number' && typeof inv.lon === 'number') ? haversineDistance(inv.lat, inv.lon, clientCoord[0], clientCoord[1]) : null;
                 const sameLocation = distance !== null && distance <= proximityRangeV;
-                const visited = matchedIdx >= 0 ? !!clientVisited[matchedIdx] : false;
+                const visited = matchedIdx >= 0 ? isClientVisitedInRange(matchedIdx) : false;
 
                 if ((matchedIdx >= 0 || hasEmbeddedClientLoc) && sameLocation && visited) {
                     realCount++;
