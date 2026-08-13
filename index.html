@@ -17015,14 +17015,31 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen { display: none !impo
         }
 
         // ===== يحسب إجمالي مدة الوقفات (بالثواني) داخل الحدود العامة، وداخل الحدود اليومية على حدة، لسيارة
-        // معيّنة، اعتماداً على أعلام insideGeneralArea/insideDailyBoundary المحسوبة مسبقاً على كل وقفة =====
+        // معيّنة. ملاحظة مهمة (إصلاح خطأ): لا يجوز الاعتماد على أعلام stop.insideGeneralArea/insideDailyBoundary
+        // لأنها تُحسب فقط عند فتح/عرض تفاصيل السيارة نفسها في نفس الجلسة (وتعتمد وقتها على المتغيرات العامة
+        // polygonCoordinates/polygonGroups/polygonDailyGroups الخاصة بالسيارة المفتوحة حينها) - فلو لم تُفتح
+        // تفاصيل السيارة بعد ضمن نفس الجلسة تظل هذه الأعلام undefined فتُحسب المدة صفراً خطأً بالكامل، وهو بالضبط
+        // ما كان يظهر في "تقرير مجموعة المشرف" (كل المناديب 0 دقيقة عدا من سبق فتح صفحة تحليله). لذا نحسب حالة
+        // كل وقفة هنا مباشرة اعتماداً على بيانات حدود السيارة (v) نفسها فقط - بنفس منطق getBoundaryStatusForPoint
+        // لكن دون أي اعتماد على متغيرات عامة أو أعلام مخزّنة سلفاً على كائن الوقفة =====
         function computeVehicleStopSecondsByBoundary(v) {
+            const generalRings = (v.polygonGroups && v.polygonGroups.length > 0)
+                ? v.polygonGroups
+                : ((v.polygonCoordinates && v.polygonCoordinates.length > 0) ? [v.polygonCoordinates] : []);
+            const dailyGroupsMap = v.polygonDailyGroups || {};
             let generalSeconds = 0, dailySeconds = 0;
             Object.values(v.allDaysData || {}).forEach(day => {
+                if (!day) return;
+                const dayWeekday = day.weekday || null;
+                const dayRings = (dayWeekday && dailyGroupsMap[dayWeekday] && dailyGroupsMap[dayWeekday].length > 0)
+                    ? dailyGroupsMap[dayWeekday] : null;
                 (day.stops || []).forEach(stop => {
                     const dur = stop.duration || 0;
-                    if (stop.insideGeneralArea) generalSeconds += dur;
-                    if (stop.hasDailyBoundary && stop.insideDailyBoundary) dailySeconds += dur;
+                    const coord = stop.avgCoord || stop.startCoord || [0, 0];
+                    const lat = coord[0] || 0, lon = coord[1] || 0;
+                    const insideGeneral = generalRings.length > 0 ? isInsideAnyRing(lat, lon, generalRings) : false;
+                    if (insideGeneral) generalSeconds += dur;
+                    if (dayRings && isInsideAnyRing(lat, lon, dayRings)) dailySeconds += dur;
                 });
             });
             return { generalSeconds, dailySeconds };
