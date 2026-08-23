@@ -4760,6 +4760,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
 
         <div class="upload-actions" style="display: none;">
             <button class="btn-start" id="btnStartAnalysis" disabled="">🚀 ابدأ التحليل (يجب رفع ملف واحد على الأقل)</button>
+            <!-- ===== زر "💾 حفظ": يحفظ بيانات المندوب (الاسم/الكود/المنطقة/القطاع/نوع ورقم المركبة) فوراً كما هي
+                 مكتوبة في الخانات أعلاه، سواء تم رفع ملفات جديدة معها أو لا - يفيد تحديداً في حالة تعديل بيانات
+                 مندوب موجود بالفعل بدون الحاجة لرفع أي ملف أو انتظار اكتمال "ابدأ التحليل" ===== -->
+            <button type="button" class="btn btn-save-results" id="btnSaveVehicleMeta" onclick="saveVehicleDataOnly()">💾 حفظ</button>
             <button class="btn btn-back-dashboard" onclick="cancelAddVehicle()">🔙 رجوع للوحة السيارات</button>
         </div>
 
@@ -18938,6 +18942,70 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     showToast('❌ حدث خطأ أثناء الحفظ: ' + err.message, 'error');
                 }
                 return null;
+            }
+        }
+
+        // ===== حفظ بيانات المندوب مباشرة من "بطاقة رفع الملفات" (الاسم/الكود/المنطقة/القطاع/نوع ورقم المركبة)
+        // بمجرد الضغط على زر "💾 حفظ"، سواء كان معها رفع/تحديث ملفات أو كان مجرد تعديل بيانات المندوب فقط
+        // بدون أي ملف. بعكس "🚀 ابدأ التحليل" فهي لا تشترط وجود ملف مرفوع، وتعمل سواء كنا بصدد إضافة مندوب
+        // جديد (currentVehicleId فارغ فيُنشأ سجل جديد) أو تحديث مندوب موجود بالفعل (يُحدَّث سجله الحالي فقط
+        // دون المساس بأي بيانات محفوظة له من قبل مثل الأيام/الحدود/العملاء) =====
+        function saveVehicleDataOnly() {
+            try {
+                const driverNameEl = document.getElementById('newVehicleDriverName');
+                const driverCodeEl = document.getElementById('newVehicleDriverCode');
+                const vehicleNumberEl = document.getElementById('newVehicleNumber');
+                const vehicleTypeEl = document.getElementById('newVehicleType');
+                const areaNameEl = document.getElementById('newVehicleArea');
+                const sectorNameEl = document.getElementById('newVehicleSector');
+
+                const driverName = driverNameEl ? driverNameEl.value.trim() : '';
+                const driverCode = driverCodeEl ? driverCodeEl.value.trim() : '';
+                const vehicleNumber = vehicleNumberEl ? vehicleNumberEl.value.trim() : '';
+                const vehicleType = vehicleTypeEl ? vehicleTypeEl.value.trim() : '';
+                const areaName = areaNameEl ? areaNameEl.value.trim() : '';
+                const sectorName = sectorNameEl ? sectorNameEl.value.trim() : '';
+
+                const existing = vehiclesStore[currentVehicleId] || {};
+
+                if (!driverName && !existing.driverName) {
+                    showToast('❌ من فضلك أدخل اسم المندوب على الأقل قبل الحفظ', 'error');
+                    return;
+                }
+
+                const id = currentVehicleId || ('vehicle_' + (++vehicleCounter) + '_' + Date.now());
+
+                vehiclesStore[id] = {
+                    ...existing,
+                    id,
+                    driverName: driverName || existing.driverName || 'غير مسجل',
+                    driverCode: driverCode || existing.driverCode || '',
+                    vehicleNumber: vehicleNumber || existing.vehicleNumber || 'غير مسجل',
+                    vehicleType: vehicleType || existing.vehicleType || '',
+                    areaName: areaName || existing.areaName || '',
+                    sectorName: sectorName || existing.sectorName || '',
+                    supervisorName: existing.supervisorName || 'غير محدد',
+                    savedAt: new Date().toISOString()
+                };
+
+                currentVehicleId = id;
+                registerSupervisorName(vehiclesStore[id].supervisorName);
+                dbPutVehicle(vehiclesStore[id]);
+
+                // ===== مزامنة نفس القيم مع خانات "معلومات المركبة والمندوب" في شاشة النتائج (لو كانت ظاهرة
+                // حالياً) حتى لا تتعارض القيمتان لو تم فتح شاشة النتائج بعد ذلك =====
+                if (document.getElementById('driverName')) document.getElementById('driverName').value = vehiclesStore[id].driverName === 'غير مسجل' ? '' : vehiclesStore[id].driverName;
+                if (document.getElementById('driverCode')) document.getElementById('driverCode').value = vehiclesStore[id].driverCode || '';
+                if (document.getElementById('areaName')) document.getElementById('areaName').value = vehiclesStore[id].areaName || '';
+                if (document.getElementById('sectorName')) document.getElementById('sectorName').value = vehiclesStore[id].sectorName || '';
+                if (document.getElementById('vehicleNumber')) document.getElementById('vehicleNumber').value = vehiclesStore[id].vehicleNumber === 'غير مسجل' ? '' : vehiclesStore[id].vehicleNumber;
+                if (document.getElementById('vehicleType')) document.getElementById('vehicleType').value = vehiclesStore[id].vehicleType || '';
+                if (document.getElementById('vehicleSupervisorName')) document.getElementById('vehicleSupervisorName').value = vehiclesStore[id].supervisorName === 'غير محدد' ? '' : vehiclesStore[id].supervisorName;
+
+                showToast('✅ تم حفظ بيانات المندوب بنجاح', 'success');
+            } catch (err) {
+                console.error('خطأ أثناء حفظ بيانات المندوب:', err);
+                showToast('❌ حدث خطأ أثناء الحفظ: ' + err.message, 'error');
             }
         }
 
