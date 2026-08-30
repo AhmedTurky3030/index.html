@@ -3985,7 +3985,43 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <input type="file" id="importVehiclesInput" accept=".json,.html" style="display:none;" onchange="handleImportVehiclesFile(event)">
                 </div>
             </div>
-            <div class="fleet-overview-cards" id="fleetOverviewCards" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;"></div>
+            <div class="fleet-overview-cards" id="fleetOverviewCards" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;">
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">🚗</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">92</div>
+                    <div style="font-size:11.5px;color:#6c757d;">سيارات لديها بيانات</div>
+                </div>
+            
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">🛣️</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">٢٤٧٬١٠٥</div>
+                    <div style="font-size:11.5px;color:#6c757d;">إجمالي المسافة (كم)</div>
+                </div>
+            
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">✅</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">١٨٬١٥٧</div>
+                    <div style="font-size:11.5px;color:#6c757d;">وقفات داخل الحدود</div>
+                </div>
+            
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">❌</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">٢٠٧٬٩٥٠</div>
+                    <div style="font-size:11.5px;color:#6c757d;">وقفات خارج الحدود</div>
+                </div>
+            
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">⚡</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">4%</div>
+                    <div style="font-size:11.5px;color:#6c757d;">متوسط كفاءة الوقت</div>
+                </div>
+            
+                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
+                    <div style="font-size:20px;">🚨</div>
+                    <div style="font-size:18px;font-weight:800;color:#333;">42473</div>
+                    <div style="font-size:11.5px;color:#6c757d;">تنبيهات مفتوحة</div>
+                </div>
+            </div>
             <div class="storage-status ok" id="storageStatus">💾 الحفظ التلقائي مفعّل على هذا الجهاز/المتصفح (0 سيارة محفوظة)</div>
             <div class="vehicles-text-filters">
                 <label class="vtf-item vtf-quick-search">
@@ -4018,17 +4054,73 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             </div>
             <div class="supervisor-filter">
                 <span class="sf-label">🧑‍💼 فلترة حسب المشرف (اختيار واحد أو أكثر):</span>
-                <div class="supervisor-chips" id="supervisorChips"><span class="supervisor-chip all-chip active" onclick="toggleSupervisorFilter(null)">👥 الكل</span></div>
+                <div class="supervisor-chips" id="supervisorChips"><span class="supervisor-chip all-chip active" onclick="toggleSupervisorFilter(null)">👥 الكل</span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('سيد محمد')">🧑‍💼 سيد محمد</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('سيد محمد')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('سيد محمد')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد وجدي')">🧑‍💼 احمد وجدي</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد وجدي')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد وجدي')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد هارون')">🧑‍💼 محمد هارون</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد هارون')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد هارون')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد قاسم')">🧑‍💼 محمد قاسم</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد قاسم')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد قاسم')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد جمال')">🧑‍💼 احمد جمال</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد جمال')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد جمال')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('خالد السيد')">🧑‍💼 خالد السيد</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('خالد السيد')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('خالد السيد')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('عاطف فيصل')">🧑‍💼 عاطف فيصل</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('عاطف فيصل')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('عاطف فيصل')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد ابراهيم')">🧑‍💼 احمد ابراهيم</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد ابراهيم')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد ابراهيم')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('ابراهيم صالح')">🧑‍💼 ابراهيم صالح</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('ابراهيم صالح')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('ابراهيم صالح')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد كامل')">🧑‍💼 احمد كامل</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد كامل')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد كامل')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد وليد')">🧑‍💼 محمد وليد</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد وليد')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد وليد')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('عمرو الباشا')">🧑‍💼 عمرو الباشا</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('عمرو الباشا')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('عمرو الباشا')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('سيد طلعت')">🧑‍💼 سيد طلعت</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('سيد طلعت')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('سيد طلعت')">🗑️</button>
+                    </span><span class="supervisor-chip ">
+                        <span class="chip-label" onclick="toggleSupervisorFilter('مصطفي مهدي')">🧑‍💼 مصطفي مهدي</span>
+                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('مصطفي مهدي')">✏️</button>
+                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('مصطفي مهدي')">🗑️</button>
+                    </span></div>
                 <button type="button" class="btn-delete-filtered-vehicles" id="deleteFilteredVehiclesBtn" onclick="deleteFilteredVehiclesFromDashboard()" title="حذف كل بيانات المناديب المطابقين للفلاتر الحالية المُطبَّقة فوق (المناديب المحددين، أو مجموعة مشرف، أو اسم قطاع معيّن)">🗑️ حذف كل المطابق للفلتر الحالي</button>
             </div>
             <div class="supervisor-summary" id="supervisorSummary" style="display:none;"></div>
             <div class="vehicles-grid" id="vehiclesGrid"></div>
-            <div class="vehicles-empty" id="vehiclesEmpty" style="display: block;">
+            <div class="vehicles-empty" id="vehiclesEmpty" style="display: none;">
                 <div class="icon">🚗</div>
                 <p>لا توجد سيارات مضافة بعد. اضغط "إضافة سيارة جديدة" للبدء.</p>
             </div>
         </div>
-        <datalist id="supervisorsList"></datalist>
+        <datalist id="supervisorsList"><option value="سيد محمد"></option><option value="احمد وجدي"></option><option value="محمد هارون"></option><option value="محمد قاسم"></option><option value="احمد جمال"></option><option value="خالد السيد"></option><option value="عاطف فيصل"></option><option value="احمد ابراهيم"></option><option value="ابراهيم صالح"></option><option value="احمد كامل"></option><option value="محمد وليد"></option><option value="عمرو الباشا"></option><option value="سيد طلعت"></option><option value="مصطفي مهدي"></option></datalist>
 
         <!-- ===== شاشة منفصلة: "زيارة مخالفة" - فحص هل قامت سيارة/مسار معيّن بزيارة (وقفة) عند لوكيشن عميل محدد أم لا ===== -->
         <div id="violationVisitScreen" class="vehicles-dashboard" style="display:none;">
@@ -4244,7 +4336,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         مجموعة مشرف كاملة، و/أو مجموعة قطاع كامل) عن فترة زمنية (يوم/أسبوع/شهر أو فترة مخصصة عبر التقويم)، وتعرض
         لكل مجموعة جدولاً منفصلاً بنفس المؤشرات (زيارات داخل/خارج حدود اليوم، وقفات خارج حدود اليوم، نسب الالتزام
         بالحدود اليومية/العامة، الفواتير الوهمية/الحقيقية، وقيمة البيع)، مع إمكانية تصدير المقارنة الكاملة كصورة أو PDF أو إكسل ===== -->
-        <div id="comparisonReportScreen" class="vehicles-dashboard" style="display:none;">
+        <div id="comparisonReportScreen" class="vehicles-dashboard" style="display: none;">
             <div class="vehicles-toolbar">
                 <h2>📊 تقرير المقارنة</h2>
                 <div class="toolbar-buttons">
@@ -4283,7 +4375,280 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                                     <span>اختر مناديب</span>
                                     <span class="vtf-ms-count" id="cmpARepsCount" style="display:none;">0</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpARepsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpARepsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('A','Reps')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('A','Reps')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد محمود سعيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد محمود سعيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود ضيف" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود ضيف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ادهم اشرف" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ادهم اشرف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كريم فايز" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>كريم فايز</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="إبراهيم مصطفى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>إبراهيم مصطفى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد القذافي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد القذافي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد فيصل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="فؤاد هاشم" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>فؤاد هاشم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى بهاء" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مصطفى بهاء</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو العربي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عمرو العربي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صلاح عبد الحميد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>صلاح عبد الحميد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود علي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود علي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود الحسيني" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود الحسيني</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمر كلوب" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عمر كلوب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد ناصر" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد ناصر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اشرف سيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>اشرف سيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد رضا" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد رضا</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الرحمن عاطف" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد الرحمن عاطف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد وليد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد وليد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سلامه سيد سلامه" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>سلامه سيد سلامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عثمان ممدوح" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عثمان ممدوح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="فؤاد محمد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>فؤاد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد الرحمن" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد عبد الرحمن</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سمير" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد سمير</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ايمن ابو سريع" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ايمن ابو سريع</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد جمال" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عبد العزيز" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد عبد العزيز</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="خالد محمد علي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>خالد محمد علي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد محمد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>سيد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله ابو خضره" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد الله ابو خضره</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا حسين" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>رضا حسين</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمر بركات" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عمر بركات</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ماجد سند" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ماجد سند</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مروان مهدي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مروان مهدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابراهيم عبد النبي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ابراهيم عبد النبي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد اسامه" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد اسامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله فيصل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد الله فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى جميل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مصطفى جميل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود رشاد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود رشاد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سلامه" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد سلامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد مسعد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد مسعد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود شفيق" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود شفيق</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كريم سيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>كريم سيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صبحي حسن" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>صبحي حسن</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فاروق" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد فاروق</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله عزت" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد الله عزت</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد سامي ابو رحاب" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد سامي ابو رحاب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد مصطفى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد مصطفى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فتحي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد فتحي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام رجب" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>اسلام رجب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد مجدي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد مجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد العال" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد عبد العال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كمال محمد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>كمال محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عماد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد عماد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="حسن شهاب" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>حسن شهاب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد نجدي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>سيد نجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="يوسف عبد الحي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>يوسف عبد الحي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد العزيز حسين" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد العزيز حسين</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد الباسط" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد عبد الباسط</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سلامة" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد سلامة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ادهم كامل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ادهم كامل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فؤاد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد فؤاد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سامي" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد سامي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="هشام محمد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>هشام محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد طه" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد طه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود درويش" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود درويش</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مسعد عوض" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مسعد عوض</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام عنتر" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>اسلام عنتر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="نادر السيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>نادر السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الحليم بدر" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبد الحليم بدر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عبد الفتاح" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد عبد الفتاح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفي سعيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مصطفي سعيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبدالرحمن متولى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عبدالرحمن متولى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو السيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>عمرو السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد العسكرى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد العسكرى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد جمال" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود رمضان" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمود رمضان</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام الصنافيرى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>اسلام الصنافيرى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عليان" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد عليان</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى زيادة" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>مصطفى زيادة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="حسين السيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>حسين السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا النيلى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>رضا النيلى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد السيد" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد بركات" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد بركات</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد العجمى" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد العجمى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عادل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>محمد عادل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد اسماعيل" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>احمد اسماعيل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا عبدالفتاح" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>رضا عبدالفتاح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابوبكر الجزار" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>ابوبكر الجزار</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صلاح الشيخ" onchange="onComparisonCheckboxChange('A','Reps')">
+                    <span>صلاح الشيخ</span>
+                </label></div>
                             </div>
                         </div>
                         <div class="comparison-filter-group">
@@ -4293,7 +4658,52 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                                     <span>اختر مشرفين</span>
                                     <span class="vtf-ms-count" id="cmpASupervisorsCount" style="display:none;">0</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpASupervisorsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpASupervisorsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('A','Supervisors')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('A','Supervisors')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد محمد" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>سيد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد وجدي" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>احمد وجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد هارون" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>محمد هارون</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد قاسم" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>محمد قاسم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد جمال" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>احمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="خالد السيد" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>خالد السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عاطف فيصل" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>عاطف فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد ابراهيم" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>احمد ابراهيم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابراهيم صالح" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>ابراهيم صالح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد كامل" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>احمد كامل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد وليد" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>محمد وليد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو الباشا" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>عمرو الباشا</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد طلعت" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>سيد طلعت</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفي مهدي" onchange="onComparisonCheckboxChange('A','Supervisors')">
+                    <span>مصطفي مهدي</span>
+                </label></div>
                             </div>
                         </div>
                         <div class="comparison-filter-group">
@@ -4301,9 +4711,24 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <div class="vtf-multiselect" id="cmpASectorsMultiselect">
                                 <button type="button" class="vtf-multiselect-btn" onclick="toggleComparisonMultiselect(event,'A','Sectors')">
                                     <span>اختر قطاعات</span>
-                                    <span class="vtf-ms-count" id="cmpASectorsCount" style="display:none;">0</span>
+                                    <span class="vtf-ms-count" id="cmpASectorsCount" style="display: inline-block;">1</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpASectorsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpASectorsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('A','Sectors')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('A','Sectors')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="لارش القاهرة" onchange="onComparisonCheckboxChange('A','Sectors')">
+                    <span>لارش القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اقتصادية القاهرة" onchange="onComparisonCheckboxChange('A','Sectors')">
+                    <span>اقتصادية القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كمارا القاهرة" onchange="onComparisonCheckboxChange('A','Sectors')">
+                    <span>كمارا القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ستار القاهرة" onchange="onComparisonCheckboxChange('A','Sectors')">
+                    <span>ستار القاهرة</span>
+                </label></div>
                             </div>
                         </div>
                     </div>
@@ -4325,7 +4750,280 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                                     <span>اختر مناديب</span>
                                     <span class="vtf-ms-count" id="cmpBRepsCount" style="display:none;">0</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBRepsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBRepsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('B','Reps')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('B','Reps')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد محمود سعيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد محمود سعيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود ضيف" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود ضيف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ادهم اشرف" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ادهم اشرف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كريم فايز" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>كريم فايز</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="إبراهيم مصطفى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>إبراهيم مصطفى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد القذافي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد القذافي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد فيصل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="فؤاد هاشم" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>فؤاد هاشم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى بهاء" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مصطفى بهاء</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو العربي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عمرو العربي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صلاح عبد الحميد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>صلاح عبد الحميد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود علي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود علي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود الحسيني" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود الحسيني</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمر كلوب" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عمر كلوب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد ناصر" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد ناصر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اشرف سيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>اشرف سيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد رضا" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد رضا</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الرحمن عاطف" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد الرحمن عاطف</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد وليد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد وليد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سلامه سيد سلامه" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>سلامه سيد سلامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عثمان ممدوح" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عثمان ممدوح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="فؤاد محمد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>فؤاد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد الرحمن" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد عبد الرحمن</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سمير" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد سمير</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ايمن ابو سريع" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ايمن ابو سريع</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد جمال" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عبد العزيز" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد عبد العزيز</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="خالد محمد علي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>خالد محمد علي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد محمد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>سيد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله ابو خضره" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد الله ابو خضره</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا حسين" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>رضا حسين</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمر بركات" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عمر بركات</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ماجد سند" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ماجد سند</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مروان مهدي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مروان مهدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابراهيم عبد النبي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ابراهيم عبد النبي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد اسامه" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد اسامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله فيصل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد الله فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى جميل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مصطفى جميل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود رشاد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود رشاد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سلامه" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد سلامه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد مسعد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد مسعد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود شفيق" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود شفيق</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كريم سيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>كريم سيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صبحي حسن" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>صبحي حسن</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فاروق" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد فاروق</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الله عزت" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد الله عزت</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد سامي ابو رحاب" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد سامي ابو رحاب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد مصطفى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد مصطفى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فتحي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد فتحي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام رجب" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>اسلام رجب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد مجدي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد مجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد العال" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد عبد العال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كمال محمد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>كمال محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عماد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد عماد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="حسن شهاب" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>حسن شهاب</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد نجدي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>سيد نجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="يوسف عبد الحي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>يوسف عبد الحي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد العزيز حسين" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد العزيز حسين</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عبد الباسط" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد عبد الباسط</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سلامة" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد سلامة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ادهم كامل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ادهم كامل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد فؤاد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد فؤاد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد سامي" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد سامي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="هشام محمد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>هشام محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد طه" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد طه</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود درويش" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود درويش</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مسعد عوض" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مسعد عوض</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام عنتر" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>اسلام عنتر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="نادر السيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>نادر السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبد الحليم بدر" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبد الحليم بدر</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عبد الفتاح" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد عبد الفتاح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفي سعيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مصطفي سعيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عبدالرحمن متولى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عبدالرحمن متولى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو السيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>عمرو السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد العسكرى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد العسكرى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد جمال" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمود رمضان" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمود رمضان</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اسلام الصنافيرى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>اسلام الصنافيرى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد عليان" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد عليان</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفى زيادة" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>مصطفى زيادة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="حسين السيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>حسين السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا النيلى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>رضا النيلى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد السيد" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد بركات" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد بركات</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد العجمى" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد العجمى</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد عادل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>محمد عادل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد اسماعيل" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>احمد اسماعيل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="رضا عبدالفتاح" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>رضا عبدالفتاح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابوبكر الجزار" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>ابوبكر الجزار</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="صلاح الشيخ" onchange="onComparisonCheckboxChange('B','Reps')">
+                    <span>صلاح الشيخ</span>
+                </label></div>
                             </div>
                         </div>
                         <div class="comparison-filter-group">
@@ -4335,7 +5033,52 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                                     <span>اختر مشرفين</span>
                                     <span class="vtf-ms-count" id="cmpBSupervisorsCount" style="display:none;">0</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBSupervisorsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBSupervisorsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('B','Supervisors')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('B','Supervisors')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد محمد" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>سيد محمد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد وجدي" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>احمد وجدي</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد هارون" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>محمد هارون</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد قاسم" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>محمد قاسم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد جمال" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>احمد جمال</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="خالد السيد" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>خالد السيد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عاطف فيصل" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>عاطف فيصل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد ابراهيم" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>احمد ابراهيم</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ابراهيم صالح" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>ابراهيم صالح</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="احمد كامل" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>احمد كامل</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="محمد وليد" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>محمد وليد</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="عمرو الباشا" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>عمرو الباشا</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="سيد طلعت" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>سيد طلعت</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="مصطفي مهدي" onchange="onComparisonCheckboxChange('B','Supervisors')">
+                    <span>مصطفي مهدي</span>
+                </label></div>
                             </div>
                         </div>
                         <div class="comparison-filter-group">
@@ -4343,15 +5086,103 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <div class="vtf-multiselect" id="cmpBSectorsMultiselect">
                                 <button type="button" class="vtf-multiselect-btn" onclick="toggleComparisonMultiselect(event,'B','Sectors')">
                                     <span>اختر قطاعات</span>
-                                    <span class="vtf-ms-count" id="cmpBSectorsCount" style="display:none;">0</span>
+                                    <span class="vtf-ms-count" id="cmpBSectorsCount" style="display: inline-block;">1</span>
                                 </button>
-                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBSectorsCheckboxes"></div>
+                                <div class="vtf-multiselect-panel comparison-checkbox-list" id="cmpBSectorsCheckboxes"><div class="vtf-ms-actions">
+                    <button type="button" onclick="event.stopPropagation(); selectAllComparisonGroup('B','Sectors')">تحديد الكل</button>
+                    <button type="button" onclick="event.stopPropagation(); clearComparisonGroup('B','Sectors')">إلغاء التحديد</button>
+                </div><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="لارش القاهرة" onchange="onComparisonCheckboxChange('B','Sectors')">
+                    <span>لارش القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="اقتصادية القاهرة" onchange="onComparisonCheckboxChange('B','Sectors')">
+                    <span>اقتصادية القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="كمارا القاهرة" onchange="onComparisonCheckboxChange('B','Sectors')">
+                    <span>كمارا القاهرة</span>
+                </label><label class="vtf-ms-option" onclick="event.stopPropagation();">
+                    <input type="checkbox" value="ستار القاهرة" onchange="onComparisonCheckboxChange('B','Sectors')">
+                    <span>ستار القاهرة</span>
+                </label></div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-            <div id="comparisonSummaryWrap"></div>
+            <div id="comparisonSummaryWrap">
+                <div style="background:linear-gradient(135deg,#f8f9fc 0%,#eef1fb 100%);border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin:14px 0;">
+                    <div style="font-size:14px;font-weight:800;color:#2d3748;margin-bottom:10px;">⚖️ ملخص المقارنة السريع</div>
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+                            <thead><tr style="background:#eef1fd;">
+                                <th style="padding:7px 10px;text-align:right;">المؤشر</th>
+                                
+                <th style="padding:7px 10px;">
+                    <div style="font-size:10.5px;font-weight:600;color:#3f51b5;margin-bottom:2px;white-space:normal;">🏢 لارش القاهرة</div>
+                    🅰️ الفترة الأولى
+                </th>
+                                
+                <th style="padding:7px 10px;">
+                    <div style="font-size:10.5px;font-weight:600;color:#00897b;margin-bottom:2px;white-space:normal;">🏢 لارش القاهرة</div>
+                    🅱️ الفترة الثانية
+                </th>
+                                <th style="padding:7px 10px;">المتفوق</th>
+                            </tr></thead>
+                            <tbody>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">👥 عدد المناديب</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">24</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">24</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#6c757d;">⚌ تعادل</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">🏆 متوسط مؤشر الأداء المركّب</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">17%</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">15%</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#28a745;font-weight:700;">◀ A أفضل</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">🧭 متوسط الالتزام بالحدود اليومية</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">9%</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">10%</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#28a745;font-weight:700;">B أفضل ▶</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">🌐 متوسط الالتزام بالحدود العامة</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">39%</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">45%</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#28a745;font-weight:700;">B أفضل ▶</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">📈 متوسط نسبة الزيارات اليومية من العامة</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">26%</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">23%</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#28a745;font-weight:700;">◀ A أفضل</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">💰 متوسط قيمة البيع لكل مندوب</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">٠ ج.م</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">٠ ج.م</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#6c757d;">⚌ تعادل</span></td>
+                </tr>
+                                
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:7px 10px;font-weight:700;color:#495057;">❌ نسبة الفواتير الوهمية</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#3f51b5;">0%</td>
+                    <td style="padding:7px 10px;text-align:center;font-weight:700;color:#00897b;">0%</td>
+                    <td style="padding:7px 10px;text-align:center;font-size:11.5px;"><span style="color:#6c757d;">⚌ تعادل</span></td>
+                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <ul style="margin:10px 0 0;padding-inline-start:20px;font-size:12.5px;color:#344055;line-height:1.9;"><li>🏆 المجموعة <b>الأولى (A)</b> تتفوق إجمالاً بمؤشر أداء مركّب أعلى بفارق <b>2 نقطة</b> - وهي الأقوى أداءً بشكل عام بين المجموعتين.</li><li>⚠️ متوسط الالتزام بالحدود اليومية في المجموعة الأولى (A) منخفض (9%) ويحتاج متابعة.</li><li>⭐ الأفضل أداءً في المجموعة الأولى (A): <b>محمد القذافي</b> (مؤشر 50%) - مرشَّح للتقدير.</li><li>🔻 الأضعف أداءً في المجموعة الأولى (A): <b>سلامه سيد سلامه</b> (مؤشر 0%) - يحتاج دعماً أو مراجعة.</li><li>⚠️ متوسط الالتزام بالحدود اليومية في المجموعة الثانية (B) منخفض (10%) ويحتاج متابعة.</li><li>⭐ الأفضل أداءً في المجموعة الثانية (B): <b>محمد القذافي</b> (مؤشر 44%) - مرشَّح للتقدير.</li><li>🔻 الأضعف أداءً في المجموعة الثانية (B): <b>احمد سمير</b> (مؤشر 0%) - يحتاج دعماً أو مراجعة.</li></ul>
+                </div></div>
         </div>
 
         <!-- ===== شاشة منفصلة: "نسخ النظام" - تسمح باختيار أي مجموعة من أدوات/بطاقات النظام ثم إنشاء نسخة HTML
@@ -5494,7 +6325,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         </div>
     </div>
 
-    <div class="toast-notification" id="toastNotification"></div>
+    <div class="toast-notification success" id="toastNotification" style="display: none;">✅ تم استيراد النسخة الاحتياطية بنجاح</div>
 
     <!-- ===== طبقة التحميل العامة: تظهر بدل تجمد الصفحة أثناء رفع/معالجة الملفات، وتعرض نص الحالة + شريط تقدّم + النسبة المئوية ===== -->
     <div class="gp-overlay" id="globalProgressOverlay">
@@ -18259,6 +19090,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const day = v.allDaysData[dayId];
                 daysOut[dayId] = {
                     fileName: day.fileName, fileType: day.fileType, weekday: day.weekday || null,
+                    // ===== [إصلاح] dateKey (تاريخ اليوم بصيغة YYYY-MM-DD) كان مفقوداً تماماً من التصدير، فكانت
+                    // كل تقارير الفترات (تقرير المقارنة، تغطية الحدود، متوسط المندوب...) تفشل في إيجاد أي أيام
+                    // ضمن أي فترة محددة بعد استعادة نسخة احتياطية JSON (لأن dateKey كانت تُعاد بناؤها من الصفر
+                    // كـ undefined)، فتظهر كل النتائج صفر عند تحديد فترة، وتظهر بشكل طبيعي فقط بدون تحديد فترة =====
+                    dateKey: day.dateKey || dateKeyFromDate(day.startTime),
                     startTime: day.startTime ? day.startTime.toISOString() : null,
                     endTime: day.endTime ? day.endTime.toISOString() : null,
                     totalTime: day.totalTime || 0, totalDistance: day.totalDistance || 0,
@@ -18298,6 +19134,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const day = obj.days[dayId];
                 allDaysData[dayId] = {
                     fileName: day.fileName, fileType: day.fileType, weekday: day.weekday || null,
+                    // ===== [إصلاح] استعادة/إعادة بناء dateKey لكل يوم عند تحميل نسخة احتياطية JSON. النسخ
+                    // الاحتياطية القديمة (المُصدَّرة قبل هذا الإصلاح) لا تحتوي على dateKey إطلاقاً، فكانت تُستعاد
+                    // كـ undefined، فتفشل isDateKeyInComparisonRange في مطابقة أي فترة محددة (تُحتسب الأيام فقط
+                    // لو تُرك حقل الفترة فارغاً بالكامل) - وهو بالضبط سبب ظهور 0% في تقرير المقارنة وغيره من
+                    // التقارير المعتمدة على فلتر الفترة كلما تم تحديد فترة، مع ظهور النتائج طبيعية بدونها.
+                    // إعادة البناء من startTime هنا تضمن عمل الفترات بشكل صحيح لكل النسخ الاحتياطية القديمة والجديدة =====
+                    dateKey: day.dateKey || dateKeyFromDate(day.startTime),
                     startTime: day.startTime ? new Date(day.startTime) : null,
                     endTime: day.endTime ? new Date(day.endTime) : null,
                     totalTime: day.totalTime || 0, totalDistance: day.totalDistance || 0,
@@ -21524,9 +22367,23 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // بدل إعادة الحساب، وتضمن تطابق الملف المُصدَّر تماماً مع ما هو معروض على الشاشة حالياً) =====
         let lastSwapSuspicionGroups = [];
 
+        // ===== دالة مساعدة صغيرة: تهرّب القيمة عشان تتحط بأمان جوه attribute من نوع data-* (بتستخدمها فلترة
+        // "المندوب" الشبيهة بالإكسل في الملف المُصدَّر) =====
+        function escSwapAttr(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        }
+
+        // ===== يبني زر فلتر "شبيه بالإكسل" (قائمة منسدلة فيها بحث + تحديد/إلغاء متعدد لكل قيم المندوبين)
+        // بجانب عنوان عمود المندوب - يُضاف فقط في الملف المُصدَّر (forExport=true) حتى لا يتغيّر شكل الجدول
+        // المعروض داخل شاشة البرنامج نفسها =====
+        function swapRepFilterHeaderBtnHtml(forExport) {
+            if (!forExport) return '';
+            return ` <button type="button" class="rep-filter-btn" onclick="if(typeof toggleRepFilterDropdown==='function')toggleRepFilterDropdown(event)" title="فلترة/بحث باسم المندوب">🔽</button>`;
+        }
+
         // ===== يبني جدول HTML الخاص بتقرير "اشتباه تبديل بضاعة" فقط (بدون أي عناصر تحكم/فلاتر) - مستخدَمة
         // من دالتي العرض على الشاشة والتصدير لملف HDML مستقل معاً، لضمان تطابق الشكل بينهما دائماً =====
-        function buildSwapSuspicionTableHtml(groups, rangeMeters, minDurationMinutes) {
+        function buildSwapSuspicionTableHtml(groups, rangeMeters, minDurationMinutes, forExport) {
             if (groups.length === 0) {
                 const d = groups.diag || {};
                 let diagHtml = '';
@@ -21561,14 +22418,14 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <th style="padding:8px;text-align:center;">#</th>
                             <th style="padding:8px;text-align:right;">📅 التاريخ</th>
                             <th style="padding:8px;text-align:center;">🕐 مدة الوقوف مع بعض فعلياً</th>
-                            <th style="padding:8px;text-align:right;">👥 المناديب المتجمّعين (وقت ومدة وقوف كل واحد)</th>
+                            <th style="padding:8px;text-align:right;position:relative;">👥 المناديب المتجمّعين (وقت ومدة وقوف كل واحد)${swapRepFilterHeaderBtnHtml(forExport)}</th>
                             <th style="padding:8px;text-align:center;">📏 أقصى مسافة بينهم</th>
                             <th style="padding:8px;text-align:center;">🗺️ الموقع</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${groups.map((g, i) => `
-                            <tr style="border-bottom:1px solid #eee;${g.maxDistance <= 30 ? 'background:#fff3cd;' : ''}">
+                            <tr style="border-bottom:1px solid #eee;${g.maxDistance <= 30 ? 'background:#fff3cd;' : ''}" data-reps="${g.drivers.map(d => escSwapAttr(d.driverName)).join('|||')}">
                                 <td style="padding:7px;text-align:center;">${i + 1}</td>
                                 <td style="padding:7px;">${g.dateKey}</td>
                                 <td style="padding:7px;text-align:center;">${g.start.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} - ${g.end.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}<div style="font-size:11px;color:#dc3545;margin-top:2px;">(تزامن فعلي ${formatSwapSuspicionDuration(g.togetherMinutes)})</div></td>
@@ -21612,66 +22469,126 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             return repGroups;
         }
 
+        // ===== [تجميع الوقفات المتكررة] لكل مندوب، ممكن يتكرر لقاؤه مع نفس المندوب التاني أكتر من مرة في
+        // أيام مختلفة - هنا بنجمع كل حالات (r.incidents) الخاصة بنفس "الزوج" (نفس المندوب الآخر) في مجموعة
+        // واحدة بدل ما تظهر كصفوف منفصلة مبعثرة، بنفس فكرة تجميع "زيارات العميل" في خاصية العملاء المكرره.
+        // الترتيب: الزوج الأكثر تكراراً (الأكثر اشتباهاً) أولاً، ثم الأحدث تاريخاً =====
+        function computeSwapSuspicionPairGroups(incidents) {
+            const map = new Map();
+            const order = [];
+            incidents.forEach(inc => {
+                const key = inc.otherDriverName + '|' + inc.otherSectorName;
+                if (!map.has(key)) {
+                    map.set(key, { otherDriverName: inc.otherDriverName, otherSectorName: inc.otherSectorName, occurrences: [] });
+                    order.push(key);
+                }
+                map.get(key).occurrences.push(inc);
+            });
+            const pairGroups = order.map(k => map.get(k));
+            pairGroups.forEach(pg => pg.occurrences.sort((a, b) => a.start - b.start));
+            pairGroups.sort((a, b) => (b.occurrences.length - a.occurrences.length)
+                || (b.occurrences[b.occurrences.length - 1].start - a.occurrences[a.occurrences.length - 1].start));
+            return pairGroups;
+        }
+
         // ===== يبني جدول HTML "مجمَّع بالمندوب" لتقرير اشتباه تبديل بضاعة (يُستخدم فقط عند اختيار قطاع
         // معيّن من الفلتر) - عمود المندوب/المشرف/قطاعه مُدمَج (rowspan) فوق كل حالات اشتباهه، بنفس الشكل
         // المستخدَم في العرض على الشاشة وفي تصدير HTML معاً =====
-        function buildSwapSuspicionRepGroupedTableHtml(repGroups, rangeMeters, minDurationMinutes) {
+        function buildSwapSuspicionRepGroupedTableHtml(repGroups, rangeMeters, minDurationMinutes, forExport) {
             if (repGroups.length === 0) {
                 return `<div style="padding:20px;text-align:center;color:#6c757d;">✅ لم يتم رصد أي اشتباه تبديل بضاعة لمناديب هذا القطاع ضمن النطاق الحالي (${rangeMeters} متر) وحد أدنى ${minDurationMinutes} دقيقة تزامن فعلي.</div>`;
             }
             const totalIncidents = repGroups.reduce((s, r) => s + r.incidents.length, 0);
+            let totalPairs = 0;
             let bodyRows = '';
             repGroups.forEach(r => {
-                r.incidents.forEach((inc, idx) => {
-                    bodyRows += `<tr style="border-bottom:1px solid #eee;">`;
+                const pairGroups = computeSwapSuspicionPairGroups(r.incidents);
+                totalPairs += pairGroups.length;
+                pairGroups.forEach((pg, idx) => {
+                    const occCount = pg.occurrences.length;
+                    const firstOcc = pg.occurrences[0];
+                    const lastOcc = pg.occurrences[occCount - 1];
+                    bodyRows += `<tr style="border-bottom:1px solid #eee;${occCount > 1 ? 'background:#fff8f0;' : ''}" data-rep="${escSwapAttr(r.driverName)}">`;
                     if (idx === 0) {
                         bodyRows += `
-                            <td rowspan="${r.incidents.length}" style="padding:7px;text-align:center;font-weight:700;background:#eef1fd;vertical-align:middle;">👤 ${r.driverName}</td>
-                            <td rowspan="${r.incidents.length}" style="padding:7px;text-align:center;background:#eef1fd;vertical-align:middle;">${r.supervisorName}</td>
-                            <td rowspan="${r.incidents.length}" style="padding:7px;text-align:center;background:#eef1fd;vertical-align:middle;">${r.sectorName}</td>`;
+                            <td rowspan="${pairGroups.length}" style="padding:7px;text-align:center;font-weight:700;background:#eef1fd;vertical-align:middle;">👤 ${r.driverName}</td>
+                            <td rowspan="${pairGroups.length}" style="padding:7px;text-align:center;background:#eef1fd;vertical-align:middle;">${r.supervisorName}</td>
+                            <td rowspan="${pairGroups.length}" style="padding:7px;text-align:center;background:#eef1fd;vertical-align:middle;">${r.sectorName}</td>`;
                     }
+                    const dateCell = (occCount > 1 && firstOcc.dateKey !== lastOcc.dateKey)
+                        ? `<div style="font-size:11px;">من ${firstOcc.dateKey}<br>إلى ${lastOcc.dateKey}</div>`
+                        : firstOcc.dateKey;
+                    const totalTogetherMinutes = pg.occurrences.reduce((s, o) => s + o.togetherMinutes, 0);
+                    const minDist = Math.min(...pg.occurrences.map(o => o.maxDistance));
+                    const maxDist = Math.max(...pg.occurrences.map(o => o.maxDistance));
+                    const distCell = minDist === maxDist ? `${Math.round(minDist)} م` : `${Math.round(minDist)} - ${Math.round(maxDist)} م`;
+                    const countCell = occCount > 1
+                        ? `<span style="background:#dc3545;color:#fff;border-radius:12px;padding:3px 11px;font-weight:700;display:inline-block;">${occCount} مرات</span>`
+                        : `<span style="color:#6c757d;">مرة واحدة</span>`;
+                    const detailsRowsHtml = pg.occurrences.map((o, oi) => `
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:5px 8px;">${oi + 1}</td>
+                            <td style="padding:5px 8px;">${o.dateKey}</td>
+                            <td style="padding:5px 8px;">${o.start.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} - ${o.end.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</td>
+                            <td style="padding:5px 8px;color:#dc3545;font-weight:700;">${Math.round(o.togetherMinutes)} د</td>
+                            <td style="padding:5px 8px;">${Math.round(o.maxDistance)} م</td>
+                            <td style="padding:5px 8px;text-align:center;"><button type="button" style="background:#667eea;color:#fff;border:none;padding:3px 9px;border-radius:12px;cursor:pointer;font-size:10px;" onclick="window.open('https://www.google.com/maps?q=${o.lat},${o.lon}&z=17', '_blank')">📍 الموقع</button></td>
+                        </tr>
+                    `).join('');
+                    const detailsHtml = `
+                        <details>
+                            <summary style="cursor:pointer;color:#4338CA;font-weight:700;font-size:11px;list-style:none;">📋 عرض كل الوقفات (${occCount})</summary>
+                            <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;text-align:center;background:#fafbff;border-radius:6px;overflow:hidden;">
+                                <thead><tr style="background:#4338CA;color:#fff;">
+                                    <th style="padding:5px 8px;">#</th><th style="padding:5px 8px;">التاريخ</th><th style="padding:5px 8px;">الوقت</th><th style="padding:5px 8px;">المدة</th><th style="padding:5px 8px;">المسافة</th><th style="padding:5px 8px;">الموقع</th>
+                                </tr></thead>
+                                <tbody>${detailsRowsHtml}</tbody>
+                            </table>
+                        </details>`;
                     bodyRows += `
-                        <td style="padding:7px;text-align:center;">${inc.dateKey}</td>
-                        <td style="padding:7px;text-align:center;font-weight:700;">${inc.otherDriverName}</td>
-                        <td style="padding:7px;text-align:center;">${inc.otherSectorName}</td>
-                        <td style="padding:7px;text-align:center;">${inc.start.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} - ${inc.end.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</td>
-                        <td style="padding:7px;text-align:center;color:#dc3545;font-weight:700;">${Math.round(inc.togetherMinutes)}</td>
-                        <td style="padding:7px;text-align:center;font-weight:700;color:${inc.maxDistance <= 30 ? '#dc3545' : '#fd7e14'};">${Math.round(inc.maxDistance)} م</td>
-                        <td style="padding:7px;text-align:center;"><button type="button" style="background:#667eea;color:#fff;border:none;padding:5px 12px;border-radius:14px;cursor:pointer;font-size:11px;" onclick="window.open('https://www.google.com/maps?q=${inc.lat},${inc.lon}&z=17', '_blank')">🗺️ الموقع</button></td>
+                        <td style="padding:7px;text-align:center;">${dateCell}</td>
+                        <td style="padding:7px;text-align:center;font-weight:700;">${pg.otherDriverName}</td>
+                        <td style="padding:7px;text-align:center;">${pg.otherSectorName}</td>
+                        <td style="padding:7px;text-align:center;">${countCell}</td>
+                        <td style="padding:7px;text-align:center;color:#dc3545;font-weight:700;">${Math.round(totalTogetherMinutes)} د${occCount > 1 ? `<div style="font-size:10px;color:#868e96;font-weight:normal;">(إجمالي ${occCount} مرات)</div>` : ''}</td>
+                        <td style="padding:7px;text-align:center;font-weight:700;color:${minDist <= 30 ? '#dc3545' : '#fd7e14'};">${distCell}</td>
+                        <td style="padding:7px;text-align:center;"><button type="button" style="background:#667eea;color:#fff;border:none;padding:5px 12px;border-radius:14px;cursor:pointer;font-size:11px;" onclick="window.open('https://www.google.com/maps?q=${lastOcc.lat},${lastOcc.lon}&z=17', '_blank')">🗺️ ${occCount > 1 ? 'آخر موقع' : 'الموقع'}</button></td>
+                        <td style="padding:7px;min-width:150px;">${detailsHtml}</td>
                     </tr>`;
                 });
             });
             return `
-                <div style="margin-bottom:10px;font-size:12px;color:#6c757d;">تم العثور على <b>${totalIncidents}</b> حالة اشتباه لعدد <b>${repGroups.length}</b> مندوب من القطاع المختار (مُجمَّعة لكل مندوب في صف واحد).</div>
+                <div style="margin-bottom:10px;font-size:12px;color:#6c757d;">تم العثور على <b>${totalIncidents}</b> حالة اشتباه (مُجمَّعة في <b>${totalPairs}</b> صف حسب كل زوج مناديب) لعدد <b>${repGroups.length}</b> مندوب من القطاع المختار.</div>
                 <table style="width:100%;border-collapse:collapse;font-size:13px;">
                     <thead>
                         <tr style="background:#f1f3f9;">
-                            <th style="padding:8px;text-align:center;">👤 المندوب</th>
+                            <th style="padding:8px;text-align:center;position:relative;">👤 المندوب${swapRepFilterHeaderBtnHtml(forExport)}</th>
                             <th style="padding:8px;text-align:center;">🧑‍💼 المشرف</th>
                             <th style="padding:8px;text-align:center;">🏢 القطاع</th>
                             <th style="padding:8px;text-align:center;">📅 التاريخ</th>
                             <th style="padding:8px;text-align:center;">🔄 مع مندوب</th>
                             <th style="padding:8px;text-align:center;">🏢 القطاع</th>
-                            <th style="padding:8px;text-align:center;">🕐 مدة الوقوف مع بعض فعلياً</th>
-                            <th style="padding:8px;text-align:center;">⏱️ مدة التزامن بالدقيقة</th>
-                            <th style="padding:8px;text-align:center;">📏 أقصى مسافة بينهم</th>
+                            <th style="padding:8px;text-align:center;">🔁 عدد مرات الوقوف مع بعض</th>
+                            <th style="padding:8px;text-align:center;">🕐 إجمالي مدة الوقوف مع بعض فعلياً</th>
+                            <th style="padding:8px;text-align:center;">📏 المسافة بينهم</th>
                             <th style="padding:8px;text-align:center;">🗺️ الموقع</th>
+                            <th style="padding:8px;text-align:center;">📋 تفاصيل كل وقفة</th>
                         </tr>
                     </thead>
                     <tbody>${bodyRows}</tbody>
                 </table>
-                <p style="margin-top:10px;font-size:12px;color:#6c757d;">⚠️ هذا التقرير اشتباه أولي فقط بناءً على تقارب الموقع بين وقفات مناديب مختلفين في نفس اليوم (بشرط استيفاء كل وقفة للحد الأدنى من المدة)، ولا يُعتبر بمفرده دليلاً قاطعاً على مخالفة فعلية — يُنصح بمراجعة كل حالة يدوياً.</p>`;
+                <p style="margin-top:10px;font-size:12px;color:#6c757d;">⚠️ هذا التقرير اشتباه أولي فقط بناءً على تقارب الموقع بين وقفات مناديب مختلفين في نفس اليوم (بشرط استيفاء كل وقفة للحد الأدنى من المدة)، ولا يُعتبر بمفرده دليلاً قاطعاً على مخالفة فعلية — يُنصح بمراجعة كل حالة يدوياً. الصفوف المظللة بلون فاتح تشير إلى أزواج تكرر وقوفهم مع بعض أكثر من مرة.</p>`;
         }
 
         // ===== دالة موحَّدة تختار شكل الجدول المناسب: الجدول المجمَّع بالمندوب لو تم اختيار قطاع معيّن من
         // الفلتر، أو الجدول المسطّح المعتاد (صف لكل حالة) لو الفلتر على "كل القطاعات" - تُستخدم في كل من
         // العرض على الشاشة وتصدير HTML معاً لضمان تطابق الشكلين دائماً =====
-        function buildSwapSuspicionReportBodyHtml(groups, rangeMeters, minDurationMinutes, sectorFilter, repFilter) {
+        function buildSwapSuspicionReportBodyHtml(groups, rangeMeters, minDurationMinutes, sectorFilter, repFilter, forExport) {
             if (sectorFilter) {
                 const repGroups = computeSwapSuspicionRepGroups(groups, sectorFilter, repFilter);
-                return buildSwapSuspicionRepGroupedTableHtml(repGroups, rangeMeters, minDurationMinutes);
+                return buildSwapSuspicionRepGroupedTableHtml(repGroups, rangeMeters, minDurationMinutes, forExport);
             }
-            return buildSwapSuspicionTableHtml(groups, rangeMeters, minDurationMinutes);
+            return buildSwapSuspicionTableHtml(groups, rangeMeters, minDurationMinutes, forExport);
         }
 
         // ===== [إصلاح 11] أداة مستقلة تماماً "توزيع فواتير على كل المناديب": بترفع شيت الفواتير الشامل
@@ -21841,7 +22758,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             // نتأكد من قراءة فلتر "المندوب" الحالي (لو ظاهر) حتى يطابق التصدير تماماً ما هو معروض على الشاشة
             const repSelForExport = document.getElementById('swapSuspicionRepFilter');
             swapSuspicionRepFilter = (swapSuspicionSectorFilter && repSelForExport) ? repSelForExport.value : '';
-            const tableHtml = buildSwapSuspicionReportBodyHtml(lastSwapSuspicionGroups, swapSuspicionRangeMeters, swapSuspicionMinDurationMinutes, swapSuspicionSectorFilter, swapSuspicionRepFilter);
+            const tableHtml = buildSwapSuspicionReportBodyHtml(lastSwapSuspicionGroups, swapSuspicionRangeMeters, swapSuspicionMinDurationMinutes, swapSuspicionSectorFilter, swapSuspicionRepFilter, true);
             const logoSrc = getProfileLogoSrc();
             const reportDate = new Date().toLocaleString('ar-EG');
 
@@ -21896,10 +22813,31 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         font-family: inherit;
     }
     .swap-susp-print-btn:hover { filter: brightness(1.05); }
+    /* ===== فلتر "المندوب" الشبيه بالإكسل: زر صغير جوه رأس العمود يفتح قائمة منسدلة فيها بحث +
+       تحديد/إلغاء متعدد لكل مندوب، بنفس فكرة فلتر الأعمدة في Excel ===== */
+    .rep-filter-btn { cursor:pointer; margin-right:4px; font-size:11px; background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.4); border-radius:4px; padding:1px 5px; color:#fff; vertical-align:middle; }
+    .rep-filter-btn:hover { background:rgba(255,255,255,0.4); }
+    .rep-filter-btn.rep-filter-active { background:#ffd43b; border-color:#f2b90a; color:#664d03; }
+    .rep-filter-dropdown { position:absolute; background:#fff; color:#222; border:1px solid #ccc; border-radius:8px; box-shadow:0 8px 22px rgba(0,0,0,0.25); padding:10px; z-index:9999; width:230px; text-align:right; font-size:12px; font-weight:normal; }
+    .rep-filter-dropdown input[type="text"] { width:100%; box-sizing:border-box; padding:6px 8px; margin-bottom:8px; border:1px solid #ccc; border-radius:6px; font-size:12px; }
+    .rep-filter-actions { display:flex; justify-content:space-between; gap:6px; margin-bottom:6px; }
+    .rep-filter-actions button { flex:1; font-size:11px; background:#eef1fd; border:1px solid #ccd0e8; border-radius:5px; padding:4px 4px; cursor:pointer; }
+    .rep-filter-actions button:hover { background:#e0e4fb; }
+    .rep-filter-list { max-height:220px; overflow-y:auto; border-top:1px solid #eee; border-bottom:1px solid #eee; padding:4px 0; margin-bottom:8px; }
+    .rep-filter-list label { display:flex; align-items:center; gap:6px; padding:3px 2px; cursor:pointer; font-weight:normal; }
+    .rep-filter-list label:hover { background:#f6f7fb; }
+    .rep-filter-empty { color:#999; padding:6px 2px; text-align:center; }
+    .rep-filter-footer { display:flex; gap:6px; }
+    .rep-filter-footer button { flex:1; padding:6px; border-radius:6px; border:none; cursor:pointer; font-weight:700; font-size:12px; }
+    .rep-filter-apply { background:#4338CA; color:#fff; }
+    .rep-filter-apply:hover { background:#372fa3; }
+    .rep-filter-clear { background:#e9ecef; color:#333; }
+    .rep-filter-clear:hover { background:#dde1e5; }
     @media print {
         body { background: #fff; padding: 0; }
         .swap-susp-print-bar { display: none !important; }
         .swap-susp-html-wrap { box-shadow: none; border-radius: 0; padding: 0; max-width: 100%; }
+        .rep-filter-btn { display: none !important; }
     }
 </style>
 </head>
@@ -21910,6 +22848,138 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
     <div class="swap-susp-html-wrap">
         ${bodyContent}
     </div>
+    <script>
+        // ===== فلتر "المندوب" الشبيه بالإكسل داخل الملف المُصدَّر (مستقل تماماً، بدون أي اعتماد على
+        // برنامج التحليل الأصلي) - يعتمد على data-rep (جدول مجمَّع بالمندوب) أو data-reps (جدول مسطّح،
+        // القيم مفصولة بـ |||) الموجودة على كل <tr> داخل الجدول =====
+        var repFilterSelectedValues = null; // null = كل المناديب ظاهرين (لا يوجد فلتر مُفعّل)
+
+        function getRepFilterAllNames(table) {
+            var set = {};
+            var trs = table.querySelectorAll('tbody tr[data-rep], tbody tr[data-reps]');
+            trs.forEach(function (tr) {
+                if (tr.getAttribute('data-rep')) set[tr.getAttribute('data-rep')] = true;
+                if (tr.getAttribute('data-reps')) {
+                    tr.getAttribute('data-reps').split('|||').forEach(function (n) { if (n) set[n] = true; });
+                }
+            });
+            return Object.keys(set).sort(function (a, b) { return a.localeCompare(b, 'ar'); });
+        }
+
+        function closeRepFilterDropdown() {
+            var dd = document.getElementById('repFilterDropdown');
+            if (dd) dd.remove();
+            document.removeEventListener('click', closeRepFilterDropdownOnOutside, true);
+        }
+
+        function closeRepFilterDropdownOnOutside(e) {
+            var dd = document.getElementById('repFilterDropdown');
+            if (dd && !dd.contains(e.target) && !e.target.classList.contains('rep-filter-btn')) closeRepFilterDropdown();
+        }
+
+        function toggleRepFilterDropdown(e) {
+            e.stopPropagation();
+            var existing = document.getElementById('repFilterDropdown');
+            if (existing) { closeRepFilterDropdown(); return; }
+            var btn = e.currentTarget;
+            var table = btn.closest('table');
+            if (!table) return;
+            var names = getRepFilterAllNames(table);
+            var selected = repFilterSelectedValues || names;
+            var selectedSet = {};
+            selected.forEach(function (n) { selectedSet[n] = true; });
+
+            var dd = document.createElement('div');
+            dd.id = 'repFilterDropdown';
+            dd.className = 'rep-filter-dropdown';
+            var listHtml = names.length ? names.map(function (n) {
+                var checked = selectedSet[n] ? 'checked' : '';
+                var safe = n.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+                return '<label><input type="checkbox" value="' + safe + '" ' + checked + '> ' + safe + '</label>';
+            }).join('') : '<div class="rep-filter-empty">لا توجد أسماء مناديب</div>';
+
+            dd.innerHTML =
+                '<input type="text" placeholder="🔍 ابحث باسم المندوب..." oninput="filterRepFilterList(this)">' +
+                '<div class="rep-filter-actions">' +
+                    '<button type="button" onclick="repFilterSelectAll(true)">تحديد الكل</button>' +
+                    '<button type="button" onclick="repFilterSelectAll(false)">إلغاء الكل</button>' +
+                '</div>' +
+                '<div class="rep-filter-list">' + listHtml + '</div>' +
+                '<div class="rep-filter-footer">' +
+                    '<button type="button" class="rep-filter-apply" onclick="applyRepFilter()">✅ تطبيق</button>' +
+                    '<button type="button" class="rep-filter-clear" onclick="clearRepFilter()">إظهار الكل</button>' +
+                '</div>';
+
+            document.body.appendChild(dd);
+            dd._table = table;
+            var rect = btn.getBoundingClientRect();
+            var ddWidth = 230;
+            var left = rect.left + window.scrollX;
+            if (left + ddWidth > window.scrollX + window.innerWidth - 10) left = window.scrollX + window.innerWidth - ddWidth - 10;
+            dd.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+            dd.style.left = Math.max(10, left) + 'px';
+
+            setTimeout(function () { document.addEventListener('click', closeRepFilterDropdownOnOutside, true); }, 0);
+        }
+
+        function filterRepFilterList(input) {
+            var q = input.value.trim();
+            var dd = input.closest('.rep-filter-dropdown');
+            dd.querySelectorAll('.rep-filter-list label').forEach(function (l) {
+                l.style.display = l.textContent.indexOf(q) !== -1 ? '' : 'none';
+            });
+        }
+
+        function repFilterSelectAll(state) {
+            var dd = document.getElementById('repFilterDropdown');
+            if (!dd) return;
+            dd.querySelectorAll('.rep-filter-list label').forEach(function (l) {
+                if (l.style.display !== 'none') {
+                    var cb = l.querySelector('input[type="checkbox"]');
+                    if (cb) cb.checked = state;
+                }
+            });
+        }
+
+        function applyRepFilterToTable(table) {
+            var trs = table.querySelectorAll('tbody tr');
+            trs.forEach(function (tr) {
+                if (!repFilterSelectedValues) { tr.style.display = ''; return; }
+                var match = false;
+                var rep = tr.getAttribute('data-rep');
+                var reps = tr.getAttribute('data-reps');
+                if (rep) match = repFilterSelectedValues.indexOf(rep) !== -1;
+                if (!match && reps) match = reps.split('|||').some(function (n) { return repFilterSelectedValues.indexOf(n) !== -1; });
+                if (!rep && !reps) match = true; // صفوف بدون بيانات مندوب (تنويهات/رسائل) تفضل ظاهرة دايماً
+                tr.style.display = match ? '' : 'none';
+            });
+        }
+
+        function applyRepFilter() {
+            var dd = document.getElementById('repFilterDropdown');
+            if (!dd) return;
+            var table = dd._table;
+            var checked = Array.prototype.slice.call(dd.querySelectorAll('.rep-filter-list input[type="checkbox"]:checked')).map(function (cb) { return cb.value; });
+            var allNames = getRepFilterAllNames(table);
+            repFilterSelectedValues = checked;
+            var headerBtn = table.querySelector('.rep-filter-btn');
+            if (headerBtn) headerBtn.classList.toggle('rep-filter-active', checked.length < allNames.length);
+            applyRepFilterToTable(table);
+            closeRepFilterDropdown();
+        }
+
+        function clearRepFilter() {
+            var dd = document.getElementById('repFilterDropdown');
+            var table = dd ? dd._table : document.querySelector('table');
+            repFilterSelectedValues = null;
+            if (table) {
+                var headerBtn = table.querySelector('.rep-filter-btn');
+                if (headerBtn) headerBtn.classList.remove('rep-filter-active');
+                applyRepFilterToTable(table);
+            }
+            closeRepFilterDropdown();
+        }
+    <\/script>
 </body>
 </html>`;
 
@@ -21962,23 +23032,35 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     return;
                 }
                 const header = [
-                    'المندوب', 'المشرف', 'القطاع', 'التاريخ', 'مع مندوب', 'قطاع الطرف الآخر',
-                    'وقت التزامن (من)', 'وقت التزامن (إلى)', 'مدة التزامن (دقيقة)', 'أقصى مسافة بينهم (متر)', 'رابط الموقع'
+                    'المندوب', 'المشرف', 'القطاع', 'مع مندوب', 'قطاع الطرف الآخر',
+                    'عدد مرات الوقوف مع بعض', 'تاريخ أول وقفة', 'تاريخ آخر وقفة',
+                    'إجمالي مدة الوقوف مع بعض (دقيقة)', 'أقرب مسافة بينهم (متر)', 'أبعد مسافة بينهم (متر)',
+                    'تفاصيل كل وقفة (تاريخ - وقت - مدة - مسافة)', 'رابط آخر موقع'
                 ];
                 const rows = [header];
                 const merges = [];
                 let rIdx = 1; // الصف 0 هو صف العناوين
                 repGroups.forEach(r => {
                     const startRow = rIdx;
-                    r.incidents.forEach(inc => {
+                    const pairGroups = computeSwapSuspicionPairGroups(r.incidents);
+                    pairGroups.forEach(pg => {
+                        const occCount = pg.occurrences.length;
+                        const firstOcc = pg.occurrences[0];
+                        const lastOcc = pg.occurrences[occCount - 1];
+                        const totalTogether = pg.occurrences.reduce((s, o) => s + o.togetherMinutes, 0);
+                        const minDist = Math.min(...pg.occurrences.map(o => o.maxDistance));
+                        const maxDist = Math.max(...pg.occurrences.map(o => o.maxDistance));
+                        const detailsText = pg.occurrences.map((o, oi) =>
+                            `${oi + 1}) ${o.dateKey} ${o.start.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}-${o.end.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} (${Math.round(o.togetherMinutes)} د, ${Math.round(o.maxDistance)} م)`
+                        ).join(' | ');
                         rows.push([
                             r.driverName, r.supervisorName, r.sectorName,
-                            inc.dateKey, inc.otherDriverName, inc.otherSectorName,
-                            inc.start.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-                            inc.end.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-                            Math.round(inc.togetherMinutes * 10) / 10,
-                            Math.round(inc.maxDistance * 10) / 10,
-                            `https://www.google.com/maps?q=${inc.lat},${inc.lon}&z=17`
+                            pg.otherDriverName, pg.otherSectorName,
+                            occCount, firstOcc.dateKey, lastOcc.dateKey,
+                            Math.round(totalTogether * 10) / 10,
+                            Math.round(minDist * 10) / 10, Math.round(maxDist * 10) / 10,
+                            detailsText,
+                            `https://www.google.com/maps?q=${lastOcc.lat},${lastOcc.lon}&z=17`
                         ]);
                         rIdx++;
                     });
@@ -21988,7 +23070,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     }
                 });
                 ws = XLSX.utils.aoa_to_sheet(rows);
-                ws['!cols'] = header.map(() => ({ wch: 16 }));
+                ws['!cols'] = header.map((h) => ({ wch: h === 'تفاصيل كل وقفة (تاريخ - وقت - مدة - مسافة)' ? 60 : 16 }));
                 if (merges.length > 0) ws['!merges'] = merges;
             } else {
                 const header = [
@@ -23156,7 +24238,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const dailyGroupsMap = v.polygonDailyGroups || {};
             let totalPts = 0, generalInside = 0, dailyTotal = 0, dailyInside = 0;
             Object.values(v.allDaysData || {}).forEach(day => {
-                if (!day || !day.coordinates || !isDateKeyInComparisonRange(day.dateKey, dateFrom, dateTo)) return;
+                if (!day || !day.coordinates || !isDateKeyInComparisonRange(day.dateKey || dateKeyFromDate(day.startTime), dateFrom, dateTo)) return;
                 const dayRings = (day.weekday && dailyGroupsMap[day.weekday] && dailyGroupsMap[day.weekday].length > 0) ? dailyGroupsMap[day.weekday] : null;
                 day.coordinates.forEach(coord => {
                     totalPts++;
@@ -23197,7 +24279,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // لو تُركت فارغة): متوسط الزيارات اليومية، متوسط الالتزام بالحدود اليومية/العامة، ومتوسط ساعات العمل يومياً.
         // يُعيد null لو لا توجد أي أيام مسجّلة لهذا المندوب ضمن الفترة المطلوبة (فيُستبعد من نتيجة التقرير)
         function computeRepAverageRowForVehicle(v, dateFrom, dateTo) {
-            const daysRaw = Object.values(v.allDaysData || {}).filter(d => d && isDateKeyInComparisonRange(d.dateKey, dateFrom, dateTo));
+            const daysRaw = Object.values(v.allDaysData || {}).filter(d => d && isDateKeyInComparisonRange(d.dateKey || dateKeyFromDate(d.startTime), dateFrom, dateTo));
             if (daysRaw.length === 0) return null;
 
             // ===== [إصلاح] نُجمِّع أولاً كل سجلات الأيام في مجموعات حسب "اليوم الفعلي" (dateKey، أو اسم الملف
@@ -23471,7 +24553,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // يحسب صف مقارنة كامل لسيارة/مندوب واحد ضمن فترة (من - إلى) محددة، باستخدام نطاق الوقفة (بالمتر) الخاص
         // بتقرير المقارنة فقط (rangeMeters) - مستقل تماماً عن نطاق الوقفة المحفوظ لكل سيارة (v.proximityRange)
         function computeComparisonRowForVehicle(v, dateFrom, dateTo, rangeMeters) {
-            const days = Object.values(v.allDaysData || {}).filter(d => d && isDateKeyInComparisonRange(d.dateKey, dateFrom, dateTo));
+            // احتياطياً: لو أي يوم مخزَّن بدون dateKey (بيانات قديمة من قبل إصلاح الاستعادة)، يُعاد بناؤه هنا
+            // من startTime مباشرة بدل استبعاد اليوم بالكامل من أي فترة محددة
+            const days = Object.values(v.allDaysData || {}).filter(d => d && isDateKeyInComparisonRange(d.dateKey || dateKeyFromDate(d.startTime), dateFrom, dateTo));
             const daysCount = new Set(days.map(d => d.dateKey || d.fileName)).size;
 
             const clients = v.clientsData || [];
@@ -23553,9 +24637,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             let minKey = null, maxKey = null;
             vehicles.forEach(v => {
                 Object.values(v.allDaysData || {}).forEach(d => {
-                    if (!d || !d.dateKey || !isDateKeyInComparisonRange(d.dateKey, dateFrom, dateTo)) return;
-                    if (minKey === null || d.dateKey < minKey) minKey = d.dateKey;
-                    if (maxKey === null || d.dateKey > maxKey) maxKey = d.dateKey;
+                    const dk = d && (d.dateKey || dateKeyFromDate(d.startTime));
+                    if (!dk || !isDateKeyInComparisonRange(dk, dateFrom, dateTo)) return;
+                    if (minKey === null || dk < minKey) minKey = dk;
+                    if (maxKey === null || dk > maxKey) maxKey = dk;
                 });
             });
             if (!minKey || !maxKey) return 'لا توجد أيام مؤرخة ضمن البيانات المتاحة';
