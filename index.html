@@ -1,5 +1,961 @@
 <!DOCTYPE html>
 <html dir="rtl" lang="ar"><head>
+    <!-- ===== بوابة تسجيل الدخول والتحقق من الصلاحية عبر Firebase: هذا السكريبت يعمل أولاً (قبل أي شيء آخر في
+         الصفحة) - يخفي محتوى الصفحة بالكامل لحد ما يتأكد المستخدم عامل تسجيل دخول (Firebase Auth) وأن حسابه
+         مسجَّل في قاعدة بيانات Firestore تحت users/{uid} وقيمة allowed = true، وإلا يمنع عرض المحتوى نهائياً
+         ويعرض بدلاً منه فورم دخول أو رسالة "ليس لديك صلاحية". لازم تستبدل قيم firebaseConfig تحت دي ببيانات
+         مشروعك الحقيقي على Firebase قبل ما تستخدم النسخة ===== -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+      import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
+      import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, getDocs, query, orderBy, limit, increment, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+      // ←←← حط بيانات مشروعك هنا
+      const firebaseConfig = {
+        apiKey: "AIzaSyAw_jhByWs2zbpA-v32yckGj_AGQ0Z5_ws",
+        authDomain: "ahmed-turky-system.firebaseapp.com",
+        projectId: "ahmed-turky-system",
+        storageBucket: "ahmed-turky-system.firebasestorage.app",
+        messagingSenderId: "683720810611",
+        appId: "1:683720810611:web:09581d17c9639bde684a06",
+        measurementId: "G-D1FCVS7HNQ"
+      };
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const db = getFirestore(app);
+      // ===== إعدادات "متصل الآن": المستخدم يُعتبر متصلاً لو وصلت نبضة (heartbeat) منه خلال آخر دقيقتين،
+      // والنبضة نفسها بترسل كل 45 ثانية طول ما الصفحة مفتوحة عنده وهو مسجل دخول =====
+      const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
+      const HEARTBEAT_INTERVAL_MS = 45 * 1000;
+      // ===== ملاحظة مهمة: مكتبات زي الخرائط (Leaflet) بتحسب أبعادها وقت أول ظهور ليها في الصفحة. لو
+      // خبّينا محتوى الصفحة بـ display:none وقت التحميل، المكتبات دي بتتهيأ بحجم صفر وبتفضل مكسورة حتى
+      // لو رجّعنا نظهر المحتوى تاني بعدين. عشان كده الحل هنا مختلف: بنسيب محتوى الصفحة الأصلي ظاهر
+      // وبيتحمّل طبيعي جداً (بكل أبعاده الصحيحة)، وبس بنحط طبقة (overlay) لونها صريح (solid) فوقه تماماً
+      // تغطّي الشاشة كلها لحد ما نتأكد من صلاحية اليوزر. اليوزر مش هيشوف أي حاجة تحت الـ overlay، لكن
+      // المحتوى الأصلي بيكون بيتحمّل ويتهيأ بشكل صحيح في الخلفية طول الوقت =====
+      function getOverlay() {
+        let overlay = document.getElementById("__auth_overlay__");
+        if (!overlay) {
+          overlay = document.createElement("div");
+          overlay.id = "__auth_overlay__";
+          overlay.style.cssText = "position:fixed;inset:0;background:#fff;z-index:999999;overflow:auto;";
+          document.body.appendChild(overlay);
+        }
+        return overlay;
+      }
+      function removeOverlay() {
+        const overlay = document.getElementById("__auth_overlay__");
+        if (overlay) overlay.remove();
+      }
+      // ===== وضع "قراءة فقط" مُصدَّر: لو الصفحة دي ملف HTML مُحمَّل (فيه __EMBEDDED_SHARE_DATA__ مُضمَّن
+      // مسبقاً) أو رابط مشاركة ذاتي الاكتفاء (#d=...)، فالبيانات already موجودة جوه الصفحة/الرابط نفسه ولا
+      // معنى إطلاقاً لتسجيل دخول Firebase هنا؛ الشخص المُستلم للملف/الرابط مفروض يشوف النتائج فوراً بدون أي
+      // بوابة دخول. عشان كده نتجاهل كل بوابة تسجيل الدخول دي تماماً في الحالة دي (مفيش overlay ولا فورم دخول) =====
+      const __isSharedReadOnlyFile = (typeof window.__EMBEDDED_SHARE_DATA__ !== 'undefined' && !!window.__EMBEDDED_SHARE_DATA__)
+        || (window.location.hash && window.location.hash.startsWith('#d='));
+
+      if (!__isSharedReadOnlyFile) {
+        // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
+        getOverlay();
+      }
+
+      // ===== توليد معرف ثابت للجهاز (Device ID): بيتخزن في localStorage (مش متأثر بإجبار تسجيل الخروج
+      // اللي بيحصل تحت)، فيفضل نفس المعرف لنفس الجهاز حتى لو المستخدم قفل المتصفح وفتحه تاني. ده بيسمحلنا
+      // نحسب "كام جهاز مختلف" بيستخدم كل حساب =====
+      function getDeviceId() {
+        let id = localStorage.getItem("__device_id__");
+        if (!id) {
+          const raw = navigator.userAgent + "|" + navigator.platform + "|" + screen.width + "x" + screen.height + "|" + Math.random();
+          let hash = 0;
+          for (let i = 0; i < raw.length; i++) { hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0; }
+          id = "dev_" + Math.abs(hash).toString(36) + "_" + Date.now().toString(36);
+          localStorage.setItem("__device_id__", id);
+        }
+        return id;
+      }
+
+      // ===== تسجيل عملية الدخول: بيتسجل سجل عام في login_logs (لكل الأحداث) + بيتحدّث مستند الجهاز
+      // تحت users/{uid}/devices/{deviceId} (لحساب عدد الأجهزة وآخر ظهور لكل جهاز) =====
+      async function logLoginEvent(user, deviceId) {
+        let ip = null;
+        try {
+          const res = await fetch("https://api.ipify.org?format=json");
+          const data = await res.json();
+          ip = data.ip || null;
+        } catch (e) { /* تجاهل: مش مشكلة لو فشل جلب الـ IP */ }
+
+        try {
+          await addDoc(collection(db, "login_logs"), {
+            uid: user.uid,
+            email: user.email,
+            deviceId,
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            screen: screen.width + "x" + screen.height,
+            ip,
+            timestamp: serverTimestamp()
+          });
+        } catch (e) { console.error("logLoginEvent error:", e); }
+
+        try {
+          const deviceRef = doc(db, "users", user.uid, "devices", deviceId);
+          const deviceSnap = await getDoc(deviceRef);
+          if (deviceSnap.exists()) {
+            await updateDoc(deviceRef, { lastSeen: serverTimestamp(), loginCount: increment(1) });
+          } else {
+            await setDoc(deviceRef, {
+              deviceId,
+              userAgent: navigator.userAgent,
+              platform: navigator.platform,
+              screen: screen.width + "x" + screen.height,
+              firstSeen: serverTimestamp(),
+              lastSeen: serverTimestamp(),
+              loginCount: 1
+            });
+          }
+        } catch (e) { console.error("device log error:", e); }
+      }
+
+      // ===== تسجيل محاولة دخول فاشلة: بيتسجل في مجموعة login_failures عشان لوحة المراقبة تقدر تكتشف
+      // محاولات الاختراق المحتملة (تكرار فشل كبير على نفس الإيميل خلال وقت قصير) =====
+      async function logFailedAttempt(email, code) {
+        try {
+          await addDoc(collection(db, "login_failures"), {
+            email: email || "-",
+            code: code || "unknown-error",
+            userAgent: navigator.userAgent,
+            timestamp: serverTimestamp()
+          });
+        } catch (e) { console.error("logFailedAttempt error:", e); }
+      }
+
+      // ===== التحقق من عدد الأجهزة المسموح بيها لكل حساب: لو الأدمن حاطط قيمة maxDevices على مستند
+      // المستخدم (users/{uid}) بيتم رفض أي جهاز جديد يتخطى الحد، أما لو مفيش حد محدد فمفيش قيود =====
+      async function checkDeviceLimit(user, deviceId, maxDevices) {
+        if (!maxDevices || maxDevices <= 0) return true;
+        try {
+          const devicesSnap = await getDocs(collection(db, "users", user.uid, "devices"));
+          const existingIds = devicesSnap.docs.map(d => d.id);
+          if (existingIds.includes(deviceId)) return true;
+          return devicesSnap.size < maxDevices;
+        } catch (e) {
+          console.error("checkDeviceLimit error:", e);
+          return true;
+        }
+      }
+
+      // ===== التحقق من حظر جهاز معيّن بعينه: الأدمن يقدر من لوحة المراقبة يمنع جهاز واحد بالتحديد من
+      // الوصول (deviceAllowed = false) حتى لو باقي أجهزة نفس الحساب مسموح لها. الحقل ده لو مش موجود
+      // أصلاً (جهاز لسه محدّش لمسه) بيُعتبر مسموح افتراضيًا =====
+      async function isDeviceBlocked(user, deviceId) {
+        try {
+          const deviceSnap = await getDoc(doc(db, "users", user.uid, "devices", deviceId));
+          return deviceSnap.exists() && deviceSnap.data().deviceAllowed === false;
+        } catch (e) {
+          console.error("isDeviceBlocked error:", e);
+          return false;
+        }
+      }
+
+      // ===== نبضة دورية (heartbeat): بترسل توقيت "الآن" كل فترة ثابتة طول ما الصفحة مفتوحة وواضحة على
+      // الشاشة، سواء على مستوى الحساب كله (users/{uid}.lastActive) أو على مستوى الجهاز نفسه
+      // (users/{uid}/devices/{deviceId}.lastActive). لوحة المراقبة بتقارن آخر نبضة بالوقت الحالي عشان
+      // تحدد "متصل الآن" ولا "غير متصل"، وكمان تعرض توقيت آخر اتصال فعلي =====
+      let __heartbeatTimer = null;
+      function startHeartbeat(user, deviceId) {
+        if (__heartbeatTimer) clearInterval(__heartbeatTimer);
+        const beat = async () => {
+          if (document.visibilityState === "hidden") return;
+          try {
+            await setDoc(doc(db, "users", user.uid), { lastActive: serverTimestamp() }, { merge: true });
+            await setDoc(doc(db, "users", user.uid, "devices", deviceId), { lastActive: serverTimestamp() }, { merge: true });
+          } catch (e) { console.error("heartbeat error:", e); }
+        };
+        beat();
+        __heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
+      }
+
+      // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
+      // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
+      // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
+      // أو إغلاق وفتح للصفحة يفرض تسجيل دخول جديد دايماً، ولا يبقى فيه جلسة محفوظة تلقائياً في المتصفح =====
+      if (!__isSharedReadOnlyFile) {
+      signOut(auth).catch(() => { /* تجاهل: مفيش جلسة أصلاً */ }).finally(() => {
+        setPersistence(auth, inMemoryPersistence).then(() => {
+          onAuthStateChanged(auth, async (user) => {
+            if (user) {
+              try {
+                // التحقق من الصلاحية
+                const userDoc = await getDoc(doc(db, "users", user.uid));
+
+                if (userDoc.exists() && userDoc.data().allowed === true) {
+                  const userData = userDoc.data();
+                  const deviceId = getDeviceId();
+                  const deviceBlocked = await isDeviceBlocked(user, deviceId);
+                  if (deviceBlocked) {
+                    await signOut(auth);
+                    const overlay = getOverlay();
+                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تم حظر هذا الجهاز تحديدًا من الوصول لهذا الحساب، حتى لو باقي أجهزتك مسموح لها. تواصل مع مسؤول النظام.</h2>";
+                    return;
+                  }
+                  const allowedDevice = await checkDeviceLimit(user, deviceId, userData.maxDevices);
+                  if (!allowedDevice) {
+                    await signOut(auth);
+                    const overlay = getOverlay();
+                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تجاوزت عدد الأجهزة المسموح بها لهذا الحساب (" + userData.maxDevices + " جهاز). تواصل مع مسؤول النظام.</h2>";
+                    return;
+                  }
+                  // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
+                  logLoginEvent(user, deviceId);
+                  startHeartbeat(user, deviceId);
+                  removeOverlay();
+                  // نحمّل التخزين المحلي (السيارات وباقي البيانات) الخاص بهذا الحساب تحديداً الآن، بعد ما
+                  // عرفنا هويته (uid)، عشان بياناته تفضل معزولة تماماً عن أي حساب تاني استُخدم على نفس الجهاز
+                  if (typeof window.initUserScopedStorage === 'function') window.initUserScopedStorage(user.uid);
+                  applyFeatureGating(userData);
+                  if (userData.isAdmin === true) {
+                    addAdminButton();
+                  }
+                } else {
+                  const overlay = getOverlay();
+                  overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
+                }
+              } catch (err) {
+                // فشل التحقق (مشكلة اتصال أو صلاحيات Firestore) → نعرض رسالة واضحة بدل صفحة فاضية
+                console.error("Firestore permission check error:", err);
+                const overlay = getOverlay();
+                overlay.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p><p style='color:#999;font-size:13px;'>تفاصيل تقنية: " + (err && err.code ? err.code : (err && err.message ? err.message : String(err))) + "</p></div>";
+              }
+            } else {
+              // مش مسجل دخول → يعرض فورم الدخول
+              showLoginForm();
+            }
+          });
+        });
+      });
+      }
+      function showLoginForm() {
+        const overlay = getOverlay();
+        overlay.innerHTML = `
+          <div style="max-width:380px;margin:90px auto;font-family:'Cairo',Arial,sans-serif;text-align:center;padding:36px 30px;background:#fff;border-radius:18px;box-shadow:0 10px 35px rgba(102,126,234,0.18);border:1px solid #eef0fb;">
+            <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:26px;">🔒</div>
+            <h2 style="margin:0 0 6px;color:#2d2d3a;font-weight:800;">تسجيل الدخول</h2>
+            <p style="margin:0 0 22px;color:#8a8aa3;font-size:13px;">أدخل بياناتك للوصول إلى النظام</p>
+            <input type="email" id="email" placeholder="الإيميل" style="width:100%;padding:13px 14px;margin:6px 0;box-sizing:border-box;border:1.5px solid #e3e3ef;border-radius:10px;font-size:14px;font-family:inherit;outline:none;">
+            <input type="password" id="password" placeholder="كلمة المرور" style="width:100%;padding:13px 14px;margin:6px 0 14px;box-sizing:border-box;border:1.5px solid #e3e3ef;border-radius:10px;font-size:14px;font-family:inherit;outline:none;">
+            <button onclick="login()" style="width:100%;padding:13px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:10px;cursor:pointer;font-size:15px;font-weight:700;font-family:inherit;">دخول</button>
+            <p id="error" style="color:#e5484d;font-size:13px;min-height:16px;margin-top:12px;"></p>
+          </div>
+        `;
+      }
+      window.login = async () => {
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+        } catch (err) {
+          // نطبع الخطأ الكامل في الـ Console ونوريه على الشاشة كمان عشان تعرف السبب الحقيقي
+          // (مثلاً: auth/unauthorized-domain, auth/invalid-credential, auth/user-not-found ...)
+          console.error("Login error:", err);
+          const code = err && err.code ? err.code : "unknown-error";
+          let msg = "خطأ في الإيميل أو كلمة المرور";
+          if (code === "auth/unauthorized-domain") {
+            msg = "هذا الدومين غير مصرّح له بتسجيل الدخول (أضِفه في Firebase Console > Authentication > Settings > Authorized domains)";
+          } else if (code === "auth/network-request-failed") {
+            msg = "فشل الاتصال بالشبكة - تحقق من الإنترنت";
+          } else if (code === "auth/too-many-requests") {
+            msg = "محاولات كثيرة جداً، حاول لاحقاً";
+          }
+          document.getElementById("error").textContent = msg + " (" + code + ")";
+          // تسجيل المحاولة الفاشلة عشان لوحة المراقبة تقدر تكتشف محاولات الاختراق المحتملة
+          logFailedAttempt(email, code);
+        }
+      };
+
+      // ===== لوحة مراقبة الأدمن (نسخة متقدمة): زرار عائم بيظهر بس للمستخدم اللي مستنده في users/{uid}
+      // فيه isAdmin === true. اللوحة بتعرض: إحصائيات سريعة، تنبيهات أمنية تلقائية (تعدد الأجهزة / محاولات
+      // فشل مشبوهة)، تبويب المستخدمين (بحث + اسم مُعرّف يدوي + تعديل الحد الأقصى للأجهزة + تفاصيل كل جهاز)،
+      // تبويب سجل الدخول، وتبويب إحصائيات برسم بياني لعدد مرات الدخول خلال آخر 7 أو 30 يوم =====
+      let __adminUsersCache = [];
+      let __adminChartLogs = [];
+
+      // ===== نظام "الصلاحيات" الدقيقة: الأدمن يحدد لكل مستخدم دوره (مستخدم/متابع/مدير/مشرف) وأي من
+      // الوظائف العشرة التالية مسموح له بالوصول إليها. تُخزَّن في users/{uid}.role و users/{uid}.permissions.
+      // أي حساب قديم (من قبل هذه الميزة) بلا هذه الحقول يُعامَل تلقائياً كـ"مستخدم" بكل الصلاحيات مفعّلة،
+      // حتى لا يتعطل أي حساب حالي فجأة بمجرد إضافة الميزة =====
+      const FEATURE_DEFS = [
+        { key: "carsBoard", label: "🚗 لوحة السيارات" },
+        { key: "addCar", label: "➕ إضافة سيارة جديدة" },
+        { key: "delegatesRanking", label: "🏆 ترتيب أداء المناديب" },
+        { key: "sectorReport", label: "📄 تقرير مجمّع بالقطاع" },
+        { key: "dailyCoverage", label: "📍 نسبة تغطية المسار اليومي" },
+        { key: "comparisonReport", label: "📊 تقرير المقارنة" },
+        { key: "jsonExport", label: "💾 نسخة JSON" },
+        { key: "htmlExport", label: "💾 نسخة HTML شاملة" },
+        { key: "importVersion", label: "📂 استيراد نسخة" },
+        { key: "resultsScreen", label: "📈 شاشة النتائج" }
+      ];
+      // ربط كل مفتاح صلاحية بالدالة الأصلية التي تفتح الوظيفة، ومحدد CSS للزر الظاهر بلوحة السيارات (لو له زر ثابت)
+      const FEATURE_GATE_MAP = {
+        carsBoard: { fn: "showVehiclesDashboard", selector: null },
+        addCar: { fn: "startAddVehicle", selector: '[onclick="startAddVehicle()"]' },
+        delegatesRanking: { fn: "showRepRankingReport", selector: '[onclick="showRepRankingReport()"]' },
+        sectorReport: { fn: "exportSectorSummaryPDF", selector: '[onclick="exportSectorSummaryPDF()"]' },
+        dailyCoverage: { fn: "showDailyRouteCoverageScreen", selector: '[onclick="showDailyRouteCoverageScreen()"]' },
+        comparisonReport: { fn: "showComparisonReportScreen", selector: '[onclick="showComparisonReportScreen()"]' },
+        jsonExport: { fn: "exportVehiclesJSON", selector: '[onclick="exportVehiclesJSON()"]' },
+        htmlExport: { fn: "exportVehiclesHTML", selector: '[onclick="exportVehiclesHTML()"]' },
+        importVersion: { fn: "triggerImportVehicles", selector: '[onclick="triggerImportVehicles()"]' },
+        resultsScreen: { fn: "openVehicle", selector: null }
+      };
+      function defaultPermissions() {
+        const p = {};
+        FEATURE_DEFS.forEach(f => p[f.key] = true);
+        return p;
+      }
+      // يدمج صلاحيات محفوظة (لو موجودة) فوق الصلاحيات الافتراضية (كلها مفعّلة)، حتى لو نقصت مفاتيح جديدة أُضيفت لاحقاً
+      function normalizePermissions(saved) {
+        const p = defaultPermissions();
+        if (saved && typeof saved === "object") Object.keys(p).forEach(k => { if (saved[k] === false) p[k] = false; });
+        return p;
+      }
+
+      let __currentUserPerms = defaultPermissions();
+      let __currentUserRole = "user";
+      let __currentUserIsAdmin = false;
+      let __featuresGated = false;
+
+      // يُحدِّث إظهار/إخفاء كل أزرار الوظائف العشرة حسب صلاحيات المستخدم الحالي (يُستدعى عند الدخول وعند أي تحديث لاحق)
+      function refreshFeatureButtonsVisibility() {
+        Object.keys(FEATURE_GATE_MAP).forEach(key => {
+          const sel = FEATURE_GATE_MAP[key].selector;
+          if (!sel) return;
+          document.querySelectorAll(sel).forEach(btn => {
+            btn.style.display = (!__currentUserIsAdmin && __currentUserPerms[key] === false) ? "none" : "";
+          });
+        });
+        const dash = document.getElementById("vehiclesDashboard");
+        const existingMsg = document.getElementById("__no_carsboard_msg__");
+        if (!__currentUserIsAdmin && __currentUserPerms.carsBoard === false) {
+          if (dash && !existingMsg) {
+            const msg = document.createElement("div");
+            msg.id = "__no_carsboard_msg__";
+            msg.style.cssText = "text-align:center;padding:80px 20px;color:#888;font-family:'Cairo',Arial,sans-serif;";
+            msg.innerHTML = "<h2>🔒 ليس لديك صلاحية للوصول إلى لوحة السيارات</h2><p>تواصل مع مسؤول النظام لتفعيل هذه الصلاحية.</p>";
+            if (dash.parentNode) dash.parentNode.insertBefore(msg, dash);
+          }
+        } else if (existingMsg) {
+          existingMsg.remove();
+        }
+      }
+
+      // يُنفَّذ مرة واحدة فقط بعد الدخول: يغلّف كل دالة من الدوال العشرة بحيث تتحقق من الصلاحية قبل التنفيذ
+      function wrapFeatureFunctionsOnce() {
+        if (__featuresGated) return;
+        __featuresGated = true;
+        Object.keys(FEATURE_GATE_MAP).forEach(key => {
+          const fnName = FEATURE_GATE_MAP[key].fn;
+          const original = window[fnName];
+          if (typeof original !== "function") return;
+          window[fnName] = function (...args) {
+            if (__currentUserIsAdmin || __currentUserPerms[key] !== false) {
+              return original.apply(this, args);
+            }
+            alert("ليس لديك صلاحية للوصول إلى هذه الوظيفة. تواصل مع مسؤول النظام.");
+          };
+        });
+      }
+
+      // يُستدعى فور تأكيد الدخول (من onAuthStateChanged) بعد قراءة مستند المستخدم، لضبط صلاحياته على كل الأزرار
+      function applyFeatureGating(userData) {
+        __currentUserRole = userData.role || "user";
+        __currentUserIsAdmin = !!userData.isAdmin;
+        __currentUserPerms = normalizePermissions(userData.permissions);
+        if (__currentUserIsAdmin) { refreshFeatureButtonsVisibility(); return; }
+        wrapFeatureFunctionsOnce();
+        refreshFeatureButtonsVisibility();
+      }
+      window.applyFeatureGating = applyFeatureGating;
+
+      function addAdminButton() {
+        if (document.getElementById("__admin_btn__")) return;
+        const btn = document.createElement("button");
+        btn.id = "__admin_btn__";
+        btn.innerHTML = "📊 لوحة المراقبة";
+        btn.style.cssText = "position:fixed;bottom:22px;left:22px;z-index:999998;padding:13px 20px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:30px;box-shadow:0 6px 18px rgba(102,126,234,0.4);cursor:pointer;font-family:'Cairo',Arial,sans-serif;font-weight:700;font-size:14px;transition:transform .15s ease;";
+        btn.onmouseenter = () => btn.style.transform = "translateY(-2px)";
+        btn.onmouseleave = () => btn.style.transform = "translateY(0)";
+        btn.onclick = () => openAdminPanel();
+        document.body.appendChild(btn);
+      }
+
+      function adminStyles() {
+        if (document.getElementById("__admin_styles__")) return;
+        const style = document.createElement("style");
+        style.id = "__admin_styles__";
+        style.textContent = `
+          #__admin_modal__ * { box-sizing: border-box; font-family: 'Cairo', Arial, sans-serif; }
+          #__admin_modal__ .ap-card { background:#fff; border-radius:16px; padding:0; width:100%; max-width:1080px; max-height:90vh; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
+          #__admin_modal__ .ap-header { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; padding:22px 26px; display:flex; justify-content:space-between; align-items:center; flex-shrink:0; }
+          #__admin_modal__ .ap-header h2 { margin:0; font-size:19px; font-weight:800; display:flex; align-items:center; gap:8px; }
+          #__admin_modal__ .ap-close { background:rgba(255,255,255,0.2); color:#fff; border:none; border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px; }
+          #__admin_modal__ .ap-body { padding:22px 26px; overflow:auto; }
+          #__admin_modal__ .ap-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:18px; }
+          #__admin_modal__ .ap-stat { background:#f7f7fc; border:1px solid #edeef7; border-radius:12px; padding:14px 16px; text-align:center; }
+          #__admin_modal__ .ap-stat b { display:block; font-size:24px; color:#4c4ce0; font-weight:800; }
+          #__admin_modal__ .ap-stat span { font-size:12px; color:#8a8aa3; }
+          #__admin_modal__ .ap-alerts { margin-bottom:18px; }
+          #__admin_modal__ .ap-alert { background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; padding:12px 16px; margin-bottom:8px; font-size:13px; color:#9a3412; display:flex; align-items:flex-start; gap:8px; }
+          #__admin_modal__ .ap-alert.danger { background:#fdeaea; border-color:#f5b5b5; color:#a11515; }
+          #__admin_modal__ .ap-alert b { display:block; margin-bottom:2px; }
+          #__admin_modal__ .ap-tabs { display:flex; gap:6px; margin-bottom:16px; border-bottom:2px solid #f0f0f7; flex-wrap:wrap; }
+          #__admin_modal__ .ap-tab { padding:10px 18px; background:none; border:none; cursor:pointer; font-weight:700; font-size:14px; color:#8a8aa3; border-bottom:2px solid transparent; margin-bottom:-2px; }
+          #__admin_modal__ .ap-tab.active { color:#4c4ce0; border-bottom-color:#4c4ce0; }
+          #__admin_modal__ .ap-search { width:100%; padding:10px 14px; border:1.5px solid #e3e3ef; border-radius:10px; margin-bottom:14px; font-size:14px; font-family:inherit; }
+          #__admin_modal__ table { width:100%; border-collapse:collapse; font-size:13px; }
+          #__admin_modal__ th { background:#f7f7fc; padding:10px 12px; text-align:right; color:#5a5a72; font-weight:700; border-bottom:2px solid #edeef7; position:sticky; top:0; }
+          #__admin_modal__ td { padding:9px 12px; border-bottom:1px solid #f2f2f7; color:#2d2d3a; vertical-align:middle; }
+          #__admin_modal__ tr:hover td { background:#fafaff; }
+          #__admin_modal__ .ap-badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap; }
+          #__admin_modal__ .ap-badge.ok { background:#e7f8ef; color:#1a9d5c; }
+          #__admin_modal__ .ap-badge.no { background:#fdeaea; color:#e5484d; }
+          #__admin_modal__ .ap-badge.admin { background:#efe9fc; color:#764ba2; }
+          #__admin_modal__ .ap-badge.warn { background:#fff3e0; color:#c2650a; }
+          #__admin_modal__ .ap-allow-toggle { border:none; border-radius:20px; padding:4px 12px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; font-family:inherit; }
+          #__admin_modal__ .ap-allow-toggle.ap-allow-on { background:#e7f8ef; color:#1a9d5c; }
+          #__admin_modal__ .ap-allow-toggle.ap-allow-off { background:#fdeaea; color:#e5484d; }
+          #__admin_modal__ .ap-allow-toggle:disabled { opacity:0.6; cursor:wait; }
+          #__admin_modal__ .ap-empty { text-align:center; color:#aaa; padding:30px; }
+          #__admin_modal__ .ap-loading { text-align:center; color:#8a8aa3; padding:40px; }
+          #__admin_modal__ .ap-nickname { border:1px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; width:120px; }
+          #__admin_modal__ .ap-maxdev { border:1px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; width:70px; text-align:center; }
+          #__admin_modal__ .ap-savebtn { background:#eef0fd; color:#4c4ce0; border:none; border-radius:6px; padding:5px 9px; font-size:11px; font-weight:700; cursor:pointer; margin-right:4px; }
+          #__admin_modal__ .ap-detailsbtn { background:none; border:1px solid #e3e3ef; border-radius:8px; padding:5px 10px; font-size:12px; cursor:pointer; color:#5a5a72; }
+          #__admin_modal__ .ap-devrow td { background:#fbfbfe; }
+          #__admin_modal__ .ap-devtable { width:100%; border-collapse:collapse; font-size:12px; margin:6px 0; }
+          #__admin_modal__ .ap-devtable th { background:#f0f0f7; font-size:11px; }
+          #__admin_modal__ .ap-chart-controls { display:flex; gap:8px; margin-bottom:14px; }
+          #__admin_modal__ .ap-range-btn { padding:7px 16px; border:1.5px solid #e3e3ef; background:#fff; border-radius:20px; cursor:pointer; font-size:13px; font-weight:700; color:#8a8aa3; }
+          #__admin_modal__ .ap-range-btn.active { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; border-color:transparent; }
+          #__admin_modal__ .ap-role-select { border:1.5px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; }
+        `;
+        document.head.appendChild(style);
+      }
+
+      // رسم بياني بسيط (بدون أي مكتبة خارجية) لعدد مرات الدخول يوم بيوم
+      function renderLoginChart(days) {
+        const container = document.getElementById("__chart_container__");
+        if (!container) return;
+        const now = new Date();
+        const buckets = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date(now);
+          d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0, 10);
+          buckets.push({ key, label: d.toLocaleDateString("ar-EG", { day: "2-digit", month: "2-digit" }), count: 0 });
+        }
+        const map = {};
+        buckets.forEach(b => map[b.key] = b);
+        __adminChartLogs.forEach(l => {
+          if (!l.date) return;
+          if (map[l.date]) map[l.date].count++;
+        });
+        const maxCount = Math.max(1, ...buckets.map(b => b.count));
+        const width = Math.max(600, buckets.length * (days > 14 ? 22 : 40));
+        const height = 200;
+        const barGap = 6;
+        const barWidth = (width / buckets.length) - barGap;
+        const chartH = 150;
+        let svg = `<svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;font-family:'Cairo',Arial,sans-serif;">`;
+        buckets.forEach((b, i) => {
+          const barH = (b.count / maxCount) * chartH;
+          const x = i * (barWidth + barGap);
+          const y = chartH - barH + 10;
+          svg += `<rect x="${x}" y="${y}" width="${barWidth}" height="${barH}" rx="4" fill="url(#apGrad)"></rect>`;
+          if (b.count > 0) {
+            svg += `<text x="${x + barWidth / 2}" y="${y - 4}" font-size="10" fill="#4c4ce0" text-anchor="middle" font-weight="700">${b.count}</text>`;
+          }
+          if (days <= 14 || i % Math.ceil(days / 15) === 0) {
+            svg += `<text x="${x + barWidth / 2}" y="${chartH + 26}" font-size="9" fill="#8a8aa3" text-anchor="middle">${b.label}</text>`;
+          }
+        });
+        svg += `<defs><linearGradient id="apGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#764ba2"/><stop offset="100%" stop-color="#667eea"/></linearGradient></defs>`;
+        svg += `</svg>`;
+        container.innerHTML = svg;
+      }
+
+      async function openAdminPanel() {
+        if (document.getElementById("__admin_modal__")) return;
+        adminStyles();
+        const modal = document.createElement("div");
+        modal.id = "__admin_modal__";
+        modal.style.cssText = "position:fixed;inset:0;background:rgba(20,20,35,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;direction:rtl;";
+        modal.innerHTML = `
+          <div class="ap-card">
+            <div class="ap-header">
+              <h2>📊 لوحة المراقبة</h2>
+              <button class="ap-close" id="__close_admin__">✕</button>
+            </div>
+            <div class="ap-body">
+              <div id="__admin_content__" class="ap-loading">جاري التحميل...</div>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+        document.getElementById("__close_admin__").onclick = () => modal.remove();
+        modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+
+        const content = document.getElementById("__admin_content__");
+        try {
+          // ---- جلب المستخدمين + أجهزتهم بالتفصيل ----
+          const usersSnap = await getDocs(collection(db, "users"));
+          const users = [];
+          for (const uDoc of usersSnap.docs) {
+            const u = uDoc.data();
+            const devicesSnap = await getDocs(collection(db, "users", uDoc.id, "devices"));
+            const devices = devicesSnap.docs.map(dd => {
+              const dv = dd.data();
+              const lastActiveMs = dv.lastActive && dv.lastActive.toDate ? dv.lastActive.toDate().getTime()
+                : (dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().getTime() : 0);
+              return {
+                id: dd.id,
+                userAgent: dv.userAgent || "-",
+                platform: dv.platform || "-",
+                screen: dv.screen || "-",
+                lastSeen: dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().toLocaleString("ar-EG") : "-",
+                firstSeen: dv.firstSeen && dv.firstSeen.toDate ? dv.firstSeen.toDate().toLocaleString("ar-EG") : "-",
+                loginCount: dv.loginCount || 1,
+                lastActiveMs,
+                allowed: dv.deviceAllowed !== false
+              };
+            });
+            // آخر نشاط للحساب ككل = الأحدث بين نبضة الحساب نفسه ونبضات كل أجهزته (تحسّبًا لحسابات
+            // سجّلت دخول قبل إضافة نظام النبضة، بيتم الاعتماد على آخر ظهور جهاز مسجّل بدلاً منها)
+            const topLevelActiveMs = u.lastActive && u.lastActive.toDate ? u.lastActive.toDate().getTime() : 0;
+            const deviceMaxActiveMs = devices.reduce((m, d) => Math.max(m, d.lastActiveMs || 0), 0);
+            const lastActiveMs = Math.max(topLevelActiveMs, deviceMaxActiveMs);
+            users.push({
+              id: uDoc.id,
+              email: u.email || uDoc.id,
+              nickname: u.nickname || "",
+              allowed: !!u.allowed,
+              isAdmin: !!u.isAdmin,
+              devices,
+              maxDevices: u.maxDevices || null,
+              lastActiveMs,
+              online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS,
+              permissions: normalizePermissions(u.permissions)
+            });
+          }
+          __adminUsersCache = users;
+
+          // ---- جلب آخر 50 عملية دخول (للعرض في الجدول) ----
+          const logsSnap = await getDocs(query(collection(db, "login_logs"), orderBy("timestamp", "desc"), limit(50)));
+          const logs = [];
+          logsSnap.forEach(d => {
+            const l = d.data();
+            logs.push({
+              email: l.email || l.uid,
+              time: l.timestamp && l.timestamp.toDate ? l.timestamp.toDate().toLocaleString("ar-EG") : "-",
+              platform: (l.platform || "") + (l.screen ? " · " + l.screen : ""),
+              ip: l.ip || "-"
+            });
+          });
+
+          // ---- جلب سجل أوسع لعمليات الدخول (لآخر 30 يوم) لرسم البياني ----
+          let chartLogsRaw = [];
+          try {
+            const chartSnap = await getDocs(query(collection(db, "login_logs"), orderBy("timestamp", "desc"), limit(1500)));
+            chartSnap.forEach(d => {
+              const l = d.data();
+              if (l.timestamp && l.timestamp.toDate) {
+                chartLogsRaw.push({ date: l.timestamp.toDate().toISOString().slice(0, 10) });
+              }
+            });
+          } catch (e) { console.error("chart logs fetch error:", e); }
+          __adminChartLogs = chartLogsRaw;
+
+          // ---- جلب محاولات الدخول الفاشلة (آخر 24 ساعة) لاكتشاف محاولات الاختراق المحتملة ----
+          let failureAlerts = [];
+          try {
+            const failSnap = await getDocs(query(collection(db, "login_failures"), orderBy("timestamp", "desc"), limit(300)));
+            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+            const countsByEmail = {};
+            failSnap.forEach(d => {
+              const f = d.data();
+              const t = f.timestamp && f.timestamp.toDate ? f.timestamp.toDate().getTime() : 0;
+              if (t >= cutoff) {
+                const key = f.email || "-";
+                countsByEmail[key] = (countsByEmail[key] || 0) + 1;
+              }
+            });
+            failureAlerts = Object.entries(countsByEmail)
+              .filter(([email, count]) => count >= 5)
+              .map(([email, count]) => ({ email, count }));
+          } catch (e) {
+            // مجموعة login_failures ممكن تكون غير موجودة لسه (هتتعمل تلقائي مع أول محاولة فاشلة) — تجاهل الخطأ
+            console.warn("login_failures fetch skipped:", e.message);
+          }
+
+          // ---- تنبيه استخدام نفس الحساب على أكثر من جهاز ----
+          const multiDeviceUsers = users.filter(u => u.devices.length > 1);
+
+          // ---- تنبيه فتح نفس الحساب من نوع جهاز مختلف (نظام/منصة مختلفة عن باقي أجهزته المسجّلة) ----
+          const deviceTypeMismatchUsers = users
+            .map(u => ({ u, platforms: [...new Set(u.devices.map(d => d.platform).filter(p => p && p !== "-"))] }))
+            .filter(x => x.platforms.length > 1);
+
+          const totalUsers = users.length;
+          const allowedCount = users.filter(u => u.allowed).length;
+          const adminCount = users.filter(u => u.isAdmin).length;
+          const totalDevices = users.reduce((s, u) => s + u.devices.length, 0);
+          const onlineCount = users.filter(u => u.online).length;
+
+          let alertsHtml = "";
+          if (failureAlerts.length || multiDeviceUsers.length || deviceTypeMismatchUsers.length) {
+            alertsHtml += `<div class="ap-alerts">`;
+            failureAlerts.forEach(a => {
+              alertsHtml += `<div class="ap-alert danger">⚠️ <div><b>محاولات دخول فاشلة مشبوهة</b>الحساب <b>${a.email}</b> فشل الدخول به ${a.count} مرة خلال آخر 24 ساعة — قد تكون محاولة اختراق.</div></div>`;
+            });
+            multiDeviceUsers.forEach(u => {
+              alertsHtml += `<div class="ap-alert">📱 <div><b>استخدام متعدد الأجهزة</b>الحساب <b>${u.nickname || u.email}</b> مسجّل دخول من ${u.devices.length} أجهزة مختلفة.</div></div>`;
+            });
+            deviceTypeMismatchUsers.forEach(({ u, platforms }) => {
+              alertsHtml += `<div class="ap-alert danger">🖥️ <div><b>تسجيل دخول من نوع جهاز مختلف</b>الحساب <b>${u.nickname || u.email}</b> تم فتحه من أنواع أجهزة مختلفة (${platforms.join(" / ")}) — تأكد إن ده فعلاً نفس صاحب الحساب.</div></div>`;
+            });
+            alertsHtml += `</div>`;
+          }
+
+          content.className = "";
+          content.innerHTML = `
+            <div class="ap-stats">
+              <div class="ap-stat"><b>${totalUsers}</b><span>إجمالي المستخدمين</span></div>
+              <div class="ap-stat"><b>${onlineCount}</b><span>🟢 متصل الآن</span></div>
+              <div class="ap-stat"><b>${allowedCount}</b><span>لهم صلاحية دخول</span></div>
+              <div class="ap-stat"><b>${adminCount}</b><span>أدمن</span></div>
+              <div class="ap-stat"><b>${totalDevices}</b><span>إجمالي الأجهزة</span></div>
+            </div>
+            ${alertsHtml}
+            <div class="ap-tabs">
+              <button class="ap-tab active" data-tab="users">المستخدمون</button>
+              <button class="ap-tab" data-tab="logs">سجل الدخول</button>
+              <button class="ap-tab" data-tab="chart">الإحصائيات</button>
+              <button class="ap-tab" data-tab="permissions">🔐 الصلاحيات</button>
+            </div>
+            <div id="__tab_users__">
+              <input type="text" id="__user_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
+              <div style="overflow:auto;max-height:44vh;">
+                <table>
+                  <thead><tr><th>الاسم</th><th>الإيميل</th><th>الحالة</th><th>الصلاحية</th><th>النوع</th><th>الأجهزة</th><th>الحد الأقصى</th><th></th></tr></thead>
+                  <tbody id="__users_tbody__"></tbody>
+                </table>
+              </div>
+            </div>
+            <div id="__tab_logs__" style="display:none;">
+              <div style="overflow:auto;max-height:50vh;">
+                <table>
+                  <thead><tr><th>الإيميل</th><th>الوقت</th><th>الجهاز</th><th>IP</th></tr></thead>
+                  <tbody id="__logs_tbody__"></tbody>
+                </table>
+              </div>
+            </div>
+            <div id="__tab_chart__" style="display:none;">
+              <div class="ap-chart-controls">
+                <button class="ap-range-btn active" data-range="7">آخر 7 أيام</button>
+                <button class="ap-range-btn" data-range="30">آخر 30 يوم</button>
+              </div>
+              <div id="__chart_container__" style="overflow-x:auto;"></div>
+            </div>
+            <div id="__tab_permissions__" style="display:none;">
+              <p style="font-size:12px;color:#8a8aa3;margin:0 0 12px;">
+                حدّد لكل مستخدم دوره، وأي الوظائف مسموح له بالوصول إليها. المستخدم "متابع" يقدر كمان تحدّد له
+                أي مستخدمي "مدير"/"مشرف" يظهر له نتائجهم (قطاع معيّن لكل مدير، أو مجموعته الكاملة لكل مشرف).
+              </p>
+              <input type="text" id="__perm_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
+              <div style="overflow:auto;max-height:56vh;">
+                <table>
+                  <thead><tr><th>المستخدم</th><th>الوظائف المسموحة</th><th></th></tr></thead>
+                  <tbody id="__perm_tbody__"></tbody>
+                </table>
+              </div>
+            </div>
+          `;
+
+          // ---- عرض/بحث جدول المستخدمين ----
+          function renderUsers(filter) {
+            const tbody = document.getElementById("__users_tbody__");
+            const f = (filter || "").trim().toLowerCase();
+            const rows = __adminUsersCache.filter(u =>
+              !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
+            );
+            if (rows.length === 0) {
+              tbody.innerHTML = `<tr><td colspan="8" class="ap-empty">لا يوجد نتائج</td></tr>`;
+              return;
+            }
+            tbody.innerHTML = rows.map(u => {
+              const statusBadge = u.online
+                ? '<span class="ap-badge ok">🟢 متصل الآن</span>'
+                : '<span class="ap-badge no">⚪ غير متصل</span>';
+              const lastSeenText = u.lastActiveMs
+                ? new Date(u.lastActiveMs).toLocaleString("ar-EG")
+                : "لم يسجّل دخول بعد";
+              return `
+              <tr>
+                <td><input class="ap-nickname" data-uid="${u.id}" value="${(u.nickname || '').replace(/"/g,'&quot;')}" placeholder="بدون اسم"></td>
+                <td>${u.email}</td>
+                <td>${statusBadge}<div style="font-size:11px;color:#8a8aa3;margin-top:3px;">${lastSeenText}</div></td>
+                <td><button class="ap-allow-toggle ${u.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${u.id}" data-allowed="${u.allowed ? '1' : '0'}">${u.allowed ? '✅ مسموح' : '❌ ممنوع'}</button></td>
+                <td>${u.isAdmin ? '<span class="ap-badge admin">أدمن</span>' : 'مستخدم'}</td>
+                <td>${u.devices.length}${u.devices.length > 1 ? ' <span class="ap-badge warn">⚠️ متعدد</span>' : ''}</td>
+                <td><input type="number" min="0" class="ap-maxdev" data-uid="${u.id}" value="${u.maxDevices || ''}" placeholder="∞"></td>
+                <td><button class="ap-detailsbtn" data-uid="${u.id}">الأجهزة ▾</button></td>
+              </tr>
+              <tr class="ap-devrow" id="__devrow_${u.id}__" style="display:none;">
+                <td colspan="8">${renderDeviceDetails(u.devices, u.id)}</td>
+              </tr>
+            `; }).join("");
+
+            // حفظ الاسم المُعرّف عند فقد التركيز
+            tbody.querySelectorAll(".ap-nickname").forEach(inp => {
+              inp.addEventListener("change", async (e) => {
+                const uid = e.target.dataset.uid;
+                try {
+                  await updateDoc(doc(db, "users", uid), { nickname: e.target.value.trim() });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.nickname = e.target.value.trim();
+                } catch (err) {
+                  console.error("save nickname error:", err);
+                  alert("تعذّر حفظ الاسم — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+
+            // حفظ الحد الأقصى للأجهزة عند فقد التركيز
+            tbody.querySelectorAll(".ap-maxdev").forEach(inp => {
+              inp.addEventListener("change", async (e) => {
+                const uid = e.target.dataset.uid;
+                const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
+                try {
+                  await updateDoc(doc(db, "users", uid), { maxDevices: val });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.maxDevices = val;
+                } catch (err) {
+                  console.error("save maxDevices error:", err);
+                  alert("تعذّر حفظ الحد الأقصى — تحقق من صلاحيات Firestore Rules");
+                }
+              });
+            });
+
+            // تبديل صلاحية الوصول للصفحة (مسموح / ممنوع) بضغطة واحدة
+            tbody.querySelectorAll(".ap-allow-toggle").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const target = e.currentTarget;
+                const uid = target.dataset.uid;
+                const next = target.dataset.allowed !== "1";
+                target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid), { allowed: next });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) u.allowed = next;
+                  target.dataset.allowed = next ? "1" : "0";
+                  target.textContent = next ? "✅ مسموح" : "❌ ممنوع";
+                  target.className = "ap-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
+                  const allowedStat = document.querySelector("#__admin_modal__ .ap-stats .ap-stat:nth-child(3) b");
+                  if (allowedStat) allowedStat.textContent = __adminUsersCache.filter(x => x.allowed).length;
+                } catch (err) {
+                  console.error("toggle allowed error:", err);
+                  alert("تعذّر تغيير الصلاحية — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على مستندات users)");
+                } finally {
+                  target.disabled = false;
+                }
+              });
+            });
+
+            // إظهار/إخفاء تفاصيل الأجهزة
+            tbody.querySelectorAll(".ap-detailsbtn").forEach(btn => {
+              btn.addEventListener("click", (e) => {
+                const uid = e.target.dataset.uid;
+                const row = document.getElementById("__devrow_" + uid + "__");
+                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
+              });
+            });
+
+            // تبديل صلاحية الوصول لجهاز معيّن بعينه (مسموح / محظور)، بغض النظر عن باقي أجهزة نفس الحساب
+            tbody.querySelectorAll(".ap-device-allow-toggle").forEach(btn => {
+              btn.addEventListener("click", async (e) => {
+                const target = e.currentTarget;
+                const uid = target.dataset.uid;
+                const deviceId = target.dataset.deviceId;
+                const next = target.dataset.allowed !== "1";
+                target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid, "devices", deviceId), { deviceAllowed: next });
+                  const u = __adminUsersCache.find(x => x.id === uid);
+                  if (u) {
+                    const d = u.devices.find(x => x.id === deviceId);
+                    if (d) d.allowed = next;
+                  }
+                  target.dataset.allowed = next ? "1" : "0";
+                  target.textContent = next ? "✅ مسموح" : "⛔ محظور";
+                  target.className = "ap-device-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
+                } catch (err) {
+                  console.error("toggle device allowed error:", err);
+                  alert("تعذّر تغيير صلاحية الجهاز — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على users/{uid}/devices/{deviceId})");
+                } finally {
+                  target.disabled = false;
+                }
+              });
+            });
+          }
+
+          function renderDeviceDetails(devices, uid) {
+            if (!devices.length) return `<div class="ap-empty" style="padding:14px;">لا توجد أجهزة مسجّلة لهذا المستخدم</div>`;
+            const nowMs = Date.now();
+            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>الحالة</th><th>الوصول</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
+            devices.forEach(d => {
+              const online = d.lastActiveMs > 0 && (nowMs - d.lastActiveMs) < ONLINE_THRESHOLD_MS;
+              html += `<tr>
+                <td style="font-size:11px;">${d.id}</td>
+                <td>${d.platform}</td>
+                <td>${d.screen}</td>
+                <td>${online ? '🟢 متصل' : '⚪ غير متصل'}</td>
+                <td><button class="ap-device-allow-toggle ${d.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${uid}" data-device-id="${d.id}" data-allowed="${d.allowed ? '1' : '0'}">${d.allowed ? '✅ مسموح' : '⛔ محظور'}</button></td>
+                <td>${d.firstSeen}</td>
+                <td>${d.lastSeen}</td>
+                <td>${d.loginCount}</td>
+              </tr>`;
+            });
+            html += `</tbody></table>`;
+            return html;
+          }
+
+          // ---- عرض/بحث جدول "الصلاحيات": دور كل مستخدم + الوظائف المسموحة له + (للمتابع فقط) تحديد
+          // أي مديرين/مشرفين يظهر لهم نتائجهم ----
+          function renderPermissionsTab(filter) {
+            const tbody = document.getElementById("__perm_tbody__");
+            if (!tbody) return;
+            const f = (filter || "").trim().toLowerCase();
+            const rows = __adminUsersCache.filter(u =>
+              !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
+            );
+            if (rows.length === 0) {
+              tbody.innerHTML = `<tr><td colspan="3" class="ap-empty">لا يوجد نتائج</td></tr>`;
+              return;
+            }
+            tbody.innerHTML = rows.map(u => {
+              const permCount = FEATURE_DEFS.filter(f2 => u.permissions[f2.key] !== false).length;
+              return `
+              <tr>
+                <td>${u.nickname || u.email}${u.isAdmin ? ' <span class="ap-badge admin">أدمن</span>' : ''}<div style="font-size:11px;color:#8a8aa3;">${u.email}</div></td>
+                <td>${permCount} / ${FEATURE_DEFS.length}</td>
+                <td>
+                  <button class="ap-detailsbtn ap-permbtn" data-uid="${u.id}">⚙️ الوظائف ▾</button>
+                </td>
+              </tr>
+              <tr class="ap-devrow" id="__permrow_${u.id}__" style="display:none;">
+                <td colspan="3">${renderPermChecklist(u)}</td>
+              </tr>
+            `; }).join("");
+
+            // إظهار/إخفاء صف الوظائف
+            tbody.querySelectorAll(".ap-permbtn").forEach(btn => {
+              btn.addEventListener("click", (e) => {
+                const uid = e.target.dataset.uid;
+                const row = document.getElementById("__permrow_" + uid + "__");
+                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
+              });
+            });
+
+            bindPermChecklistEvents();
+          }
+
+          // يبني شبكة تشيك بوكس للوظائف العشرة الخاصة بمستخدم معيّن
+          function renderPermChecklist(u) {
+            const boxes = FEATURE_DEFS.map(f2 => `
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:7px 10px;">
+                <input type="checkbox" class="ap-perm-check" data-uid="${u.id}" data-key="${f2.key}" ${u.permissions[f2.key] !== false ? "checked" : ""}>
+                ${f2.label}
+              </label>
+            `).join("");
+            return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:12px;background:#fbfbfe;border-radius:10px;">${boxes}</div>`;
+          }
+
+          function bindPermChecklistEvents() {
+            document.querySelectorAll(".ap-perm-check").forEach(cb => {
+              cb.addEventListener("change", async (e) => {
+                const uid = e.target.dataset.uid;
+                const key = e.target.dataset.key;
+                const u = __adminUsersCache.find(x => x.id === uid);
+                if (!u) return;
+                const newPerms = Object.assign({}, u.permissions, { [key]: e.target.checked });
+                e.target.disabled = true;
+                try {
+                  await updateDoc(doc(db, "users", uid), { permissions: newPerms });
+                  u.permissions = newPerms;
+                  renderPermissionsTab(document.getElementById("__perm_search__").value);
+                  const row = document.getElementById("__permrow_" + uid + "__");
+                  if (row) row.style.display = "table-row";
+                } catch (err) {
+                  console.error("save permissions error:", err);
+                  alert("تعذّر حفظ الصلاحية — تحقق من صلاحيات Firestore Rules");
+                  e.target.checked = !e.target.checked;
+                } finally {
+                  e.target.disabled = false;
+                }
+              });
+            });
+          }
+
+          renderUsers("");
+          document.getElementById("__user_search__").addEventListener("input", (e) => renderUsers(e.target.value));
+          document.getElementById("__perm_search__").addEventListener("input", (e) => renderPermissionsTab(e.target.value));
+
+          // ---- جدول سجل الدخول ----
+          const logsTbody = document.getElementById("__logs_tbody__");
+          logsTbody.innerHTML = logs.length ? logs.map(l => `
+            <tr>
+              <td>${l.email}</td>
+              <td>${l.time}</td>
+              <td style="font-size:12px;">${l.platform}</td>
+              <td>${l.ip}</td>
+            </tr>
+          `).join("") : `<tr><td colspan="4" class="ap-empty">لا يوجد سجلات دخول بعد</td></tr>`;
+
+          // ---- تبويبات ----
+          modal.querySelectorAll(".ap-tab").forEach(tab => {
+            tab.onclick = () => {
+              modal.querySelectorAll(".ap-tab").forEach(t => t.classList.remove("active"));
+              tab.classList.add("active");
+              document.getElementById("__tab_users__").style.display = tab.dataset.tab === "users" ? "block" : "none";
+              document.getElementById("__tab_logs__").style.display = tab.dataset.tab === "logs" ? "block" : "none";
+              document.getElementById("__tab_chart__").style.display = tab.dataset.tab === "chart" ? "block" : "none";
+              document.getElementById("__tab_permissions__").style.display = tab.dataset.tab === "permissions" ? "block" : "none";
+              if (tab.dataset.tab === "chart") {
+                const activeRange = modal.querySelector(".ap-range-btn.active");
+                renderLoginChart(activeRange ? parseInt(activeRange.dataset.range, 10) : 7);
+              }
+              if (tab.dataset.tab === "permissions") {
+                renderPermissionsTab("");
+              }
+            };
+          });
+
+          // ---- تبديل نطاق الرسم البياني (7 / 30 يوم) ----
+          modal.querySelectorAll(".ap-range-btn").forEach(btn => {
+            btn.onclick = () => {
+              modal.querySelectorAll(".ap-range-btn").forEach(b => b.classList.remove("active"));
+              btn.classList.add("active");
+              renderLoginChart(parseInt(btn.dataset.range, 10));
+            };
+          });
+        } catch (e) {
+          console.error("openAdminPanel error:", e);
+          content.className = "";
+          content.innerHTML = "<p style='color:#e5484d;text-align:center;padding:30px;'>حدث خطأ أثناء تحميل بيانات لوحة المراقبة. تحقق من صلاحيات Firestore Rules الخاصة بالأدمن (لازم قاعدة تسمح لصاحب isAdmin=true بقراءة users و login_logs و login_failures بالكامل، وكمان تسمح له بالكتابة (update) على مستندات users).</p>";
+        }
+      }
+      window.openAdminPanel = openAdminPanel;
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تحليل مسارات KML و GPX - Ahmed Ali</title>
@@ -3058,11 +4014,13 @@ button[onclick*="showViolationVisitScreen()"],#violationVisitScreen,
 button[onclick*="showAreaViolationsReport()"],#areaViolationsModal,
 button[onclick*="showDuplicateClientsCleanerScreen()"],#duplicateClientsCleanerScreen,
 button[onclick*="showUpdateRegionsScreen()"],#updateRegionsScreen,
+button[onclick*="showNeglectTrendScreen()"],#neglectTrendScreen,
 button[onclick*="showSalesBaseReportScreen()"],#salesBaseReportScreen,
 button[onclick*="showBoundaryDrawingScreen()"],#boundaryDrawingScreen,
 button[onclick*="showExportRegionScreen()"],#exportRegionScreen,
 button[onclick*="showSharedCustomersScreen()"],#sharedCustomersScreen,
 button[onclick*="showEliteClientsReport()"],#eliteClientsReportModal,
+button[onclick*="showDailyRouteCoverageScreen()"],#dailyRouteCoverageScreen,
 button[onclick*="showScheduledRouteReportScreen()"],#scheduledRouteReportScreen,
 button[onclick*="showFullSectorReportModal()"],#fullSectorReportModal,
 button[onclick*="showDriverReviewModal()"],#driverReviewModal,
@@ -3155,7 +4113,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 </div>
             </div>
             <div class="fleet-overview-cards" id="fleetOverviewCards" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;"></div>
-            <div class="storage-status ok" id="storageStatus">💾 الحفظ التلقائي مفعّل على هذا الجهاز/المتصفح (0 سيارة محفوظة)</div>
+            <div class="storage-status ok" id="storageStatus">💾 الحفظ التلقائي مفعّل على هذا الجهاز/المتصفح (91 سيارة محفوظة)</div>
             <div class="vehicles-text-filters">
                 <label class="vtf-item vtf-quick-search">
                     🔎 بحث سريع (اسم/كود مندوب/رقم مركبة/منطقة/قطاع)
@@ -3298,42 +4256,30 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             <div id="neglectTrendChartWrap"></div>
         </div>
 
-        <!-- ===== شاشة منفصلة ومستقلة تماماً عن "neglectedClientsScreen" أعلاه: خاصة فقط بزر "طباعة العملاء
-        المهملين" في شاشة نتائج السيارة (weekdayFilterBar). تعرض عملاء السيارة/المندوب المفتوح حالياً فقط (وليس كل
-        الأسطول) والمهملين حسب معيار المدة المحدد، محصورين على يوم واحد يختاره المستخدم من أيام الأسبوع (أو كل
-        الأيام) - بغض النظر تماماً عن الأيام المرفوعة أو المحددة في "فلترة حسب اليوم" أعلى شاشة النتائج. لا تشترك
-        هذه الشاشة مع شاشة التقرير الشامل في أي عنصر أو متغيّر (انظر computeSingleVehicleNeglectedClients و
-        renderResultsNeglectedClientsReport و exportResultsNeglectedClientsPDF) ===== -->
+        <!-- ===== شاشة منفصلة ومستقلة تماماً عن "neglectedClientsScreen" أعلاه: خاصة فقط بزر "تحميل خط
+        السير" في شاشة نتائج السيارة (weekdayFilterBar). تعرض جميع عملاء خط سير السيارة/المندوب المفتوح حالياً
+        فقط (وليس كل الأسطول) لليوم المحدد بالكامل - سواء تمت زيارتهم أم لا - محصورين على يوم واحد يختاره المستخدم
+        من أيام الأسبوع (أو كل الأيام) - بغض النظر تماماً عن الأيام المرفوعة أو المحددة في "فلترة حسب اليوم" أعلى
+        شاشة النتائج. لا تشترك هذه الشاشة مع شاشة التقرير الشامل في أي عنصر أو متغيّر (انظر
+        computeSingleVehicleNeglectedClients و renderResultsNeglectedClientsReport و
+        exportResultsNeglectedClientsPDF) ===== -->
         <div id="resultsNeglectedClientsScreen" class="vehicles-dashboard" style="display:none;">
             <div class="vehicles-toolbar">
-                <h2 id="resultsNeglectedClientsTitle">📋 طباعة العملاء المهملين</h2>
+                <h2 id="resultsNeglectedClientsTitle">🛣️ تحميل خط السير</h2>
                 <div class="toolbar-buttons">
                     <button class="btn btn-backup btn-supervisor-pdf" onclick="exportResultsNeglectedClientsHTML()">📄 تحميل HTML</button>
                     <button class="btn btn-back-dashboard" onclick="backFromResultsNeglectedClientsScreen()">🔙 رجوع لنتائج السيارة</button>
                 </div>
             </div>
             <p style="color:#495057;font-size:13px;margin:6px 0 16px;">
-                يعرض هذا التقرير عملاء هذه السيارة/المندوب فقط، الذين لم تتم زيارتهم منذ عدد الأيام المحدد أدناه بالمقارنة بتاريخ اليوم، محصورين على اليوم المحدد أدناه من أيام الأسبوع - بغض النظر عن الأيام المرفوعة أو المحددة أعلى شاشة النتائج.
+                يعرض هذا التقرير جميع عملاء خط سير هذه السيارة/المندوب فقط لليوم المحدد أدناه من أيام الأسبوع بالكامل، سواء تمت زيارتهم خلال هذا اليوم أم لا - بغض النظر عن الأيام المرفوعة أو المحددة أعلى شاشة النتائج.
             </p>
             <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;margin:14px 0;background:#f8f9fc;padding:10px;border-radius:10px;">
                 <label style="font-size:12px;color:#495057;">
-                    📆 اليوم المحدد للطباعة
+                    📆 اليوم المحدد للتحميل
                     <select id="resultsNeglectedDaySelect" onchange="onResultsNeglectedDaySelectChange()" style="display:block;width:170px;padding:6px;border-radius:8px;border:1px solid #ccc;margin-top:3px;">
                         <option value="">كل الأيام</option>
                     </select>
-                </label>
-                <label style="font-size:12px;color:#495057;">
-                    ⏳ لم تتم الزيارة منذ
-                    <select id="resultsNeglectedThresholdSelect" onchange="onResultsNeglectedThresholdPresetChange()" style="display:block;width:180px;padding:6px;border-radius:8px;border:1px solid #ccc;margin-top:3px;">
-                        <option value="7">أسبوع (7 أيام)</option>
-                        <option value="14" selected="">أسبوعين (14 يوم)</option>
-                        <option value="30">شهر (30 يوم)</option>
-                        <option value="custom">مدة مخصصة...</option>
-                    </select>
-                </label>
-                <label style="font-size:12px;color:#495057;display:none;" id="resultsNeglectedCustomDaysWrap">
-                    عدد الأيام المخصص
-                    <input type="number" id="resultsNeglectedCustomDaysInput" value="14" min="1" style="display:block;width:140px;padding:6px;border-radius:8px;border:1px solid #ccc;margin-top:3px;" onchange="renderResultsNeglectedClientsReport()">
                 </label>
                 <button type="button" class="btn-start" style="width:auto;padding:10px 26px;" onclick="renderResultsNeglectedClientsReport()">🔄 تحديث</button>
             </div>
@@ -4138,15 +5084,16 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <div class="weekday-chips" id="weekdayChips"></div>
                     <button type="button" class="filter-reset" id="weekdaySelectAllBtn">تحديد الكل</button>
                     <button type="button" class="filter-reset" id="weekdayClearBtn">مسح التحديد</button>
-                    <!-- ===== زر "طباعة العملاء المهملين" الخاص بشاشة نتائج السيارة: وظيفة مستقلة تماماً عن
+                    <!-- ===== زر "تحميل خط السير" الخاص بشاشة نتائج السيارة: وظيفة مستقلة تماماً عن
                          شاشة "تقرير العملاء المهملين" الشاملة (لا تشترك معها في أي عنصر HTML أو متغيّر جافاسكريبت)،
                          خاصة فقط بالسيارة/المندوب المفتوح حالياً. عند الضغط عليه تظهر قائمة منسدلة لاختيار يوم واحد
                          من أيام الأسبوع (أو "كل الأيام") تُطبَّق بغض النظر عن الأيام المرفوعة أو المحددة حالياً في
-                         "فلترة حسب اليوم" أعلاه، ثم تُفتح شاشة مستقلة منفصلة لعرض/طباعة عملاء ذلك اليوم المهملين
-                         — راجع toggleResultsNeglectedDayMenu() و openResultsNeglectedClientsScreen() ===== -->
+                         "فلترة حسب اليوم" أعلاه، ثم تُفتح شاشة مستقلة منفصلة لعرض/تحميل جميع عملاء خط سير ذلك اليوم
+                         بالكامل (سواء تمت زيارتهم أم لا) — راجع toggleResultsNeglectedDayMenu() و
+                         openResultsNeglectedClientsScreen() ===== -->
                     <div style="position:relative;display:inline-block;">
-                        <button type="button" class="filter-reset" id="printNeglectedClientsBtn" style="background:#6f42c1;color:#fff;border-color:#6f42c1;" onclick="toggleResultsNeglectedDayMenu()" title="اختر يوماً من أيام الأسبوع (أو كل الأيام) بشكل مستقل تماماً عن الأيام المحددة هنا، لعرض/طباعة العملاء المهملين لهذا اليوم فقط">
-                            📋 طباعة العملاء المهملين ▾
+                        <button type="button" class="filter-reset" id="printNeglectedClientsBtn" style="background:#6f42c1;color:#fff;border-color:#6f42c1;" onclick="toggleResultsNeglectedDayMenu()" title="اختر يوماً من أيام الأسبوع (أو كل الأيام) بشكل مستقل تماماً عن الأيام المحددة هنا، لعرض/تحميل جميع عملاء خط سير هذا اليوم بالكامل">
+                            🛣️ تحميل خط السير ▾
                         </button>
                         <div id="resultsNeglectedDayMenu" style="display:none;position:absolute;top:100%;right:0;z-index:100000;background:#fff;border:1px solid #dee2e6;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.15);padding:10px;min-width:170px;margin-top:6px;max-height:280px;overflow-y:auto;"></div>
                     </div>
@@ -4947,7 +5894,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         </div>
     </div>
 
-    <div class="toast-notification" id="toastNotification"></div>
+    <div class="toast-notification error" id="toastNotification" style="display: none;">⚠️ لسه ما عملتش نسخة احتياطية من بياناتك - يُفضّل عمل نسخة الآن حماية للبيانات (زر "نسخة JSON")</div>
 
     <!-- ===== طبقة التحميل العامة: تظهر بدل تجمد الصفحة أثناء رفع/معالجة الملفات، وتعرض نص الحالة + شريط تقدّم + النسبة المئوية ===== -->
     <div class="gp-overlay" id="globalProgressOverlay">
@@ -4961,8 +5908,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
     </div>
 
     <!-- ===== شريط التراجع عن الحذف (يظهر مؤقتاً بعد حذف أي سيارة) ===== -->
-    <div class="undo-bar" id="undoBar">
-        <span id="undoBarMessage"></span>
+    <div class="undo-bar" id="undoBar" style="display: none;">
+        <span id="undoBarMessage">🗑️ تم حذف 91 مندوب/سيارة (وتم حذف اسم المشرف: محمد وليد، احمد كامل، عاطف فيصل، محمد قاسم، ابراهيم صالح، محمد هارون، خالد السيد، سيد محمد، احمد ابراهيم، احمد وجدي، احمد جمال، مصطفي مهدي، احمد حمد، عمرو الباشا لعدم تبقي أي مناديب تابعين له)</span>
         <button type="button" id="undoBarBtn">↩️ تراجع</button>
     </div>
 
@@ -4970,7 +5917,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
     <div class="cc-overlay" id="ccOverlay">
         <div class="cc-box">
             <div class="cc-icon">⚠️</div>
-            <div class="cc-msg" id="ccMsg"></div>
+            <div class="cc-msg" id="ccMsg">سيتم حذف بيانات 91 مندوب/سيارة مطابقين لـ:
+بدون أي فلتر (كل السيارات المحفوظة)
+
+هل أنت متأكد؟</div>
             <div class="cc-actions">
                 <button type="button" class="cc-btn-cancel" id="ccCancelBtn">إلغاء</button>
                 <button type="button" class="cc-btn-ok" id="ccOkBtn">🗑️ نعم، احذف</button>
@@ -11742,12 +12692,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             }
             if (menu) menu.style.display = 'none';
 
-            const thresholdDays = getResultsNeglectedThresholdDays();
             for (let i = 0; i < selectedDays.length; i++) {
                 const day = selectedDays[i];
                 showToast(`⏳ جاري تجهيز وتحميل يوم ${day} (${i + 1} من ${selectedDays.length})...`, 'success');
                 resultsNeglectedSelectedDay = day;
-                let rows = computeSingleVehicleNeglectedClients(currentVehicleId, thresholdDays, resultsNeglectedSelectedDay);
+                let rows = computeSingleVehicleNeglectedClients(currentVehicleId, resultsNeglectedSelectedDay);
                 rows = orderRowsByNearestNeighborRoute(rows);
                 lastResultsNeglectedReport = rows;
                 await exportResultsNeglectedClientsHTML();
@@ -11808,29 +12757,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             renderResultsNeglectedClientsReport();
         }
 
-        function getResultsNeglectedThresholdDays() {
-            const sel = document.getElementById('resultsNeglectedThresholdSelect');
-            if (!sel) return 14;
-            if (sel.value === 'custom') {
-                const customEl = document.getElementById('resultsNeglectedCustomDaysInput');
-                const val = customEl ? parseInt(customEl.value) : 14;
-                return (!isNaN(val) && val > 0) ? val : 14;
-            }
-            const val = parseInt(sel.value);
-            return (!isNaN(val) && val > 0) ? val : 14;
-        }
-
-        function onResultsNeglectedThresholdPresetChange() {
-            const sel = document.getElementById('resultsNeglectedThresholdSelect');
-            const wrap = document.getElementById('resultsNeglectedCustomDaysWrap');
-            if (wrap) wrap.style.display = (sel && sel.value === 'custom') ? 'block' : 'none';
-            renderResultsNeglectedClientsReport();
-        }
-
         // ===== دالة حساب مستقلة تماماً عن computeFleetNeglectedClients: تحصر الحساب على سيارة/مندوب واحد فقط
         // (المفتوح حالياً في شاشة النتائج)، مع تصفية اختيارية بيوم واحد من أيام الأسبوع حسب الحدود اليومية
-        // (polygonDailyGroups) الخاصة بهذه السيارة تحديداً - بغض النظر عن أي فلاتر أو أيام محددة في مكان آخر =====
-        function computeSingleVehicleNeglectedClients(vehicleId, thresholdDays, dayName) {
+        // (polygonDailyGroups) الخاصة بهذه السيارة تحديداً - بغض النظر عن أي فلاتر أو أيام محددة في مكان آخر.
+        // ===== زر "تحميل خط السير": تُعيد هذه الدالة *جميع* عملاء خط سير اليوم المحدد بالكامل (سواء تمت زيارتهم
+        // أم لا) وليس فقط "المهملين" منهم - يبقى تاريخ آخر زيارة/عدد الأيام محسوباً لكل عميل لعرضه فقط كمعلومة
+        // إضافية في الجدول، دون استخدامه كمعيار لاستبعاد أي عميل من القائمة =====
+        function computeSingleVehicleNeglectedClients(vehicleId, dayName) {
             const v = vehiclesStore ? vehiclesStore[vehicleId] : null;
             if (!v) return [];
             const vClients = v.clientsData || [];
@@ -11869,20 +12802,20 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 let daysSince = null;
                 if (lastVisitDate) daysSince = Math.round((now - lastVisitDate) / 86400000);
                 const neverVisited = !lastVisitDate;
-                if (neverVisited || (daysSince !== null && daysSince >= thresholdDays)) {
-                    rows.push({
-                        name: client.name || `عميل ${idx + 1}`,
-                        code: client.code || '—',
-                        phone: client.phone || '—',
-                        lat: typeof client.lat === 'number' ? client.lat : null,
-                        lon: typeof client.lon === 'number' ? client.lon : null,
-                        driverName: v.driverName || 'غير مسجل',
-                        vehicleNumber: v.vehicleNumber || 'غير مسجل',
-                        lastVisitDate,
-                        daysSince,
-                        neverVisited
-                    });
-                }
+                // ===== يُضاف كل عميل ضمن خط سير هذا اليوم بغض النظر عن كونه "مهملاً" أم لا (تحميل خط السير
+                // بالكامل)؛ بيانات آخر زيارة تبقى محسوبة فقط لعرضها كمعلومة إضافية في الجدول =====
+                rows.push({
+                    name: client.name || `عميل ${idx + 1}`,
+                    code: client.code || '—',
+                    phone: client.phone || '—',
+                    lat: typeof client.lat === 'number' ? client.lat : null,
+                    lon: typeof client.lon === 'number' ? client.lon : null,
+                    driverName: v.driverName || 'غير مسجل',
+                    vehicleNumber: v.vehicleNumber || 'غير مسجل',
+                    lastVisitDate,
+                    daysSince,
+                    neverVisited
+                });
             });
 
             rows.sort((a, b) => {
@@ -12354,8 +13287,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 });
             }
             const v = vehiclesStore[currentVehicleId];
-            const thresholdDays = getResultsNeglectedThresholdDays();
-            let rows = computeSingleVehicleNeglectedClients(currentVehicleId, thresholdDays, resultsNeglectedSelectedDay);
+            let rows = computeSingleVehicleNeglectedClients(currentVehicleId, resultsNeglectedSelectedDay);
             rows = orderRowsByNearestNeighborRoute(rows);
             lastResultsNeglectedReport = rows;
 
@@ -12363,7 +13295,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const todayLabel = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
             const titleEl = document.getElementById('resultsNeglectedClientsTitle');
-            if (titleEl) titleEl.textContent = `📋 طباعة العملاء المهملين - ${v.driverName || 'غير مسجل'} (${v.vehicleNumber || '—'}) - ${dayLabel}`;
+            if (titleEl) titleEl.textContent = `🛣️ تحميل خط السير - ${v.driverName || 'غير مسجل'} (${v.vehicleNumber || '—'}) - ${dayLabel}`;
 
             const summaryEl = document.getElementById('resultsNeglectedClientsSummary');
             if (summaryEl) {
@@ -12372,10 +13304,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <div class="pdf-clients-summary">
                         <strong>📊 ملخص:</strong>
                         <span class="highlight">📅 اليوم: ${todayLabel}</span> |
-                        <span class="highlight">📆 اليوم المحدد للطباعة: ${dayLabel}</span> |
-                        <span class="not-visited">⚠️ إجمالي العملاء المهملين: ${rows.length}</span> |
-                        <span class="not-visited">🚫 لم تتم زيارتهم إطلاقاً: ${neverCount}</span> |
-                        <span class="highlight">⏳ معيار الإهمال الحالي: ${thresholdDays} يوم بدون زيارة</span>
+                        <span class="highlight">📆 اليوم المحدد للتحميل: ${dayLabel}</span> |
+                        <span class="not-visited">🛣️ إجمالي عملاء خط السير: ${rows.length}</span> |
+                        <span class="not-visited">🚫 لم تتم زيارتهم إطلاقاً: ${neverCount}</span>
                     </div>
                     <div style="font-size:11.5px;color:#6c757d;margin-top:4px;">🧭 الترتيب: تسلسلي حسب الأقرب جغرافياً (كل عميل يليه الأقرب له)</div>`;
             }
@@ -12383,7 +13314,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const wrap = document.getElementById('resultsNeglectedClientsTableWrap');
             if (!wrap) return;
             if (rows.length === 0) {
-                wrap.innerHTML = `<p style="color:#28a745;font-weight:600;padding:14px;">✅ لا يوجد عملاء مهملون حالياً لهذه السيارة حسب المعيار واليوم المحدد.</p>`;
+                wrap.innerHTML = `<p style="color:#28a745;font-weight:600;padding:14px;">✅ لا يوجد عملاء ضمن خط سير هذه السيارة لليوم المحدد.</p>`;
                 return;
             }
             let html = `
@@ -12432,13 +13363,12 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         async function exportResultsNeglectedClientsHTML() {
             const rows = lastResultsNeglectedReport && lastResultsNeglectedReport.length > 0
                 ? lastResultsNeglectedReport
-                : (currentVehicleId ? computeSingleVehicleNeglectedClients(currentVehicleId, getResultsNeglectedThresholdDays(), resultsNeglectedSelectedDay) : []);
+                : (currentVehicleId ? computeSingleVehicleNeglectedClients(currentVehicleId, resultsNeglectedSelectedDay) : []);
             if (rows.length === 0) {
-                showToast('✅ لا يوجد عملاء مهملون حالياً لهذه السيارة/اليوم لتصديرهم', 'error');
+                showToast('✅ لا يوجد عملاء ضمن خط سير هذه السيارة/اليوم لتصديرهم', 'error');
                 return;
             }
             const v = vehiclesStore[currentVehicleId] || {};
-            const thresholdDays = getResultsNeglectedThresholdDays();
             const neverCount = rows.filter(r => r.neverVisited).length;
             const logoSrc = getProfileLogoSrc();
             const todayLabel = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -12446,7 +13376,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
 
             const loadingDiv = document.getElementById('loading');
             loadingDiv.classList.add('active');
-            loadingDiv.querySelector('p').textContent = '⏳ جاري إنشاء ملف HTML لتقرير العملاء المهملين...';
+            loadingDiv.querySelector('p').textContent = '⏳ جاري إنشاء ملف HTML لتحميل خط السير...';
 
             // مهلة قصيرة حتى يتاح للمتصفح رسم رسالة التحميل قبل بدء بناء الملف (يفيد عند وجود عدد كبير من العملاء)
             await new Promise(resolve => setTimeout(resolve, 30));
@@ -12473,7 +13403,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const reportRowsJson = JSON.stringify(reportRowsData).replace(/<\/script/gi, '<\\/script');
 
                 const generatedAt = new Date().toLocaleString('ar-EG');
-                const reportTitle = `طباعة العملاء المهملين - ${escapeHtml(v.driverName || 'غير مسجل')} (${escapeHtml(v.vehicleNumber || '—')}) - ${escapeHtml(dayLabel)}`;
+                const reportTitle = `تحميل خط السير - ${escapeHtml(v.driverName || 'غير مسجل')} (${escapeHtml(v.vehicleNumber || '—')}) - ${escapeHtml(dayLabel)}`;
 
                 const htmlDoc = `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -12586,7 +13516,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
     <div class="report-header">
         <img class="logo" src="${logoSrc}" alt="شعار">
         <div class="titles">
-            <h1>📋 ${reportTitle}</h1>
+            <h1>🛣️ ${reportTitle}</h1>
             <div class="sub">📅 تاريخ التقرير: ${generatedAt} — اليوم: ${escapeHtml(todayLabel)}</div>
         </div>
         <img class="company-logo" src="${FLY_GROUP_COMPANY_LOGO}" alt="Fly Group">
@@ -12596,9 +13526,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         <div><strong>📊 ملخص:</strong></div>
         <div style="margin-top:6px;">
             <span class="pill">📆 اليوم المحدد: ${escapeHtml(dayLabel)}</span>
-            <span class="pill danger" id="totalCountPill">⚠️ إجمالي العملاء المهملين: ${rows.length}</span>
+            <span class="pill danger" id="totalCountPill">🛣️ إجمالي عملاء خط السير: ${rows.length}</span>
             <span class="pill danger" id="neverCountPill">🚫 لم تتم زيارتهم إطلاقاً: ${neverCount}</span>
-            <span class="pill">⏳ معيار الإهمال: ${thresholdDays} يوم بدون زيارة</span>
         </div>
         <div style="margin-top:6px;color:#6c757d;font-size:12px;">🧭 الترتيب: تسلسلي حسب الأقرب جغرافياً (كل عميل يليه الأقرب له)</div>
     </div>
@@ -12665,7 +13594,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         document.getElementById('reportTbody').innerHTML = currentReportRows.map((r, i) => buildReportRowHtml(r, i)).join('');
         const totalPill = document.getElementById('totalCountPill');
         const neverPill = document.getElementById('neverCountPill');
-        if (totalPill) totalPill.textContent = \`⚠️ إجمالي العملاء المهملين: \${currentReportRows.length}\`;
+        if (totalPill) totalPill.textContent = \`🛣️ إجمالي عملاء خط السير: \${currentReportRows.length}\`;
         if (neverPill) neverPill.textContent = \`🚫 لم تتم زيارتهم إطلاقاً: \${currentReportRows.filter(r => r.neverVisited).length}\`;
     }
 
@@ -20274,15 +21203,56 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             hideSelectors.push('button[onclick="showSystemCopyScreen()"],#systemCopyScreen');
             hideSelectors.push('#toolsToolbarDropdown');
 
-            // ===== نفرّغ مؤقتاً كل الحاويات اللي بتتبني ديناميكياً من بيانات السيارات/الرحلات المحفوظة حالياً
-            // (شبكة السيارات، تبويبات الأيام، محتوى الأيام، شبكة العملاء، جدول الوقفات) قبل التقاط نسخة الصفحة،
-            // عشان النسخة الناتجة تبدأ فارغة تماماً بدون أي أثر مرئي لبيانات النظام الأصلي، ثم نُعيدها فوراً
-            // لوضعها الحالي حتى لا تتأثر شاشة المستخدم الحالية =====
-            const dynamicContainerIds = ['vehiclesGrid', 'daysTabs', 'daysContent', 'clientsGrid', 'stopsTableBody'];
-            const savedInnerHtml = {};
+            // ===== نفرّغ مؤقتاً كل الحاويات اللي بتتبني ديناميكياً من بيانات السيارات/الرحلات/التقارير المحفوظة أو
+            // المعروضة حالياً (شبكة السيارات، تبويبات الأيام، محتوى الأيام، شبكة العملاء، جدول الوقفات، وكل جداول
+            // وملخصات التقارير الأخرى بالنظام) قبل التقاط نسخة الصفحة، ثم نُعيدها فوراً لوضعها الحالي حتى لا تتأثر
+            // شاشة المستخدم الحالية. ===== إصلاح: قبل كده كانت القائمة قاصرة على 5 حاويات فقط، فأي تقرير كبير كان
+            // المستخدم فتحه في نفس الجلسة (تصنيف مناديب، فواتير، عملاء مشتركة، عملاء مهملين...إلخ) كان يفضل محفوظاً
+            // فعلياً داخل الصفحة (حتى لو الشاشة بتاعته مخفية) ويتصور بالكامل جوه "النسخة الفارغة" - وده كان السبب
+            // الحقيقي في تضخم حجم الملف الناتج (كل صفوف الجداول دي كانت بتتحفظ كنص HTML) وفي طول/تجمّد وقت النسخ
+            // (تسلسل DOM أكبر بكتير من اللازم). لاحظ: لا نُدرِج هنا أي حاوية بها كائن جافاسكريبت حي مرتبط بها
+            // (مثل خريطة Leaflet في boundaryDrawMap) لأن تفريغ/استعادة الـ innerHTML بتاعها هيكسر الخريطة الحالية =====
+            const dynamicContainerIds = [
+                'vehiclesGrid', 'daysTabs', 'daysContent', 'clientsGrid', 'stopsTableBody',
+                'anomalyListWrap', 'areaViolationsSummary', 'areaViolationsTableWrap',
+                'boundaryDrawDataExcelPanel', 'boundaryDrawDownloadPanel', 'boundaryDrawSalesExcelPanel',
+                'boundaryDrawSummary', 'boundaryDrawTableWrap', 'bulkInvoiceDistributeResult',
+                'comparisonSummaryWrap', 'dailyRouteCoverageSummary', 'dailyRouteCoverageTableWrap',
+                'driverReviewSummary', 'driverReviewTableWrap', 'dupClientsSummary', 'dupClientsTableWrap',
+                'eliteClientsSummary', 'eliteClientsTableWrap', 'exportRegionDownloadPanel', 'exportRegionSummary',
+                'fullReportDetailSummary', 'fullReportDetailTableWrap', 'fullSectorReportSummary',
+                'fullSectorReportTableWrap', 'invoicesDailyBreakdownWrap', 'invoicesReportSummary',
+                'invoicesReportTableWrap', 'neglectTrendChartWrap', 'neglectTrendSummary',
+                'neglectedClientsListWrap', 'phantomInvoiceBanner', 'repAverageTableWrap',
+                'repRankingExportColsList', 'repRankingTableWrap', 'resultsNeglectedClientsSummary',
+                'resultsNeglectedClientsTableWrap', 'resultsNeglectedDayMenu', 'resultsVisitedClientsSummary',
+                'resultsVisitedClientsTableWrap', 'routeCoverageSectorsCheckboxes', 'routeSpeedChartDaysWrap',
+                'salesBaseDownloadPanel', 'salesBaseSummary', 'salesBaseTableWrap', 'sectorVisitsReportSummary',
+                'sectorVisitsReportTableWrap', 'sharedCustomersSummary', 'sharedCustomersTableWrap',
+                'supGroupExportColsList', 'supervisorGroupReportHeader', 'supervisorGroupReportTableWrap',
+                'swapOccurrenceDetailSummary', 'swapOccurrenceDetailTableWrap', 'swapSuspicionTableWrap',
+                'tripCostDaysWrap', 'updateRegionsDownloadPanel', 'updateRegionsSummary', 'updateRegionsTableWrap',
+                'violationClientPicker', 'violationVisitResults', 'vipClientsListWrap', 'visitsReportSummary',
+                'visitsReportTableWrap'
+            ];
+            updateProgressOverlay(10, 'جاري تفريغ الجداول والتقارير المؤقتة...');
+            await gpYield();
+            // ===== [إصلاح تجمّد الصفحة] كان التفريغ/الاستعادة بيتم عن طريق قراءة el.innerHTML (تحويل كل صفوف
+            // الجدول لسلسلة نصية ضخمة) ثم كتابتها فاضية، وبعدين إعادة تعيين el.innerHTML من السلسلة المحفوظة
+            // (إعادة تحليل HTML كامل من جديد). العمليتين دول (تسلسل نصي + إعادة تحليل) مكلفتين جداً لو أي تقرير
+            // كان معروض فيه آلاف الصفوف في نفس الجلسة - وهما السبب الحقيقي وراء "التجمّد" اللي بيحصل غالباً عند
+            // الضغط على "إنشاء النسخة المخصصة" (مش عدد الحاويات نفسه، لكن حجم المحتوى جوه أي حاوية منها). الحل:
+            // بدل تحويل المحتوى لنص وإرجاعه لنص، بننقل العناصر الفعلية (DOM nodes) لحاوية مؤقتة (DocumentFragment)
+            // في الذاكرة من غير أي تسلسل/تحليل نصي إطلاقاً، ثم نرجّعها بمجرد ما naخد النسخة - أسرع بشكل كبير
+            // جداً مع أي تقرير كبير، ونفس النتيجة تماماً (الحاوية تظهر فاضية وقت الالتقاط) =====
+            const savedFragments = {};
             dynamicContainerIds.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) { savedInnerHtml[id] = el.innerHTML; el.innerHTML = ''; }
+                if (el && el.firstChild) {
+                    const frag = document.createDocumentFragment();
+                    while (el.firstChild) frag.appendChild(el.firstChild);
+                    savedFragments[id] = frag;
+                }
             });
 
             updateProgressOverlay(20, 'جاري نسخ محتوى الصفحة...');
@@ -20293,7 +21263,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             // استعادة المحتوى الحالي فوراً بعد الالتقاط حتى لا تتأثر الشاشة اللي المستخدم شايفها الآن
             dynamicContainerIds.forEach(id => {
                 const el = document.getElementById(id);
-                if (el && savedInnerHtml[id] !== undefined) el.innerHTML = savedInnerHtml[id];
+                if (el && savedFragments[id]) el.appendChild(savedFragments[id]);
             });
 
             updateProgressOverlay(50, 'جاري تجهيز الأدوات المختارة...');
@@ -25454,6 +26424,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const invoiceStats = computeVehicleInvoiceStatsForRange(v, '', '', proximityRangeV);
                 const realInvoicesCount = invoiceStats.realCount || 0;
                 const fakeInvoicesCount = invoiceStats.fakeCount || 0;
+                // نسبة الزيارات اليومية من العامة (نفس منطق تقرير "ترتيب أداء المناديب"): عدد الزيارات الواقعة
+                // داخل الحدود اليومية مقسوماً على عدد الزيارات الواقعة داخل الحدود العامة (عملاء تمت زيارتهم)
+                const dailyVisitedClients = computeVehicleDailyVisitedClientsCount(v);
+                const dailyFromGeneralPct = visitedClients > 0 ? Math.round((dailyVisitedClients / visitedClients) * 100) : 0;
                 return {
                     driverName: v.driverName || 'غير مسجل',
                     vehicleNumber: v.vehicleNumber || 'غير مسجل',
@@ -25464,7 +26438,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     periodLabel, invoicesCount, realInvoicesCount, fakeInvoicesCount, avgDailyClientsCount,
                     generalBoundaryPct: boundaryCoverage.generalPct,
                     dailyBoundaryPct: boundaryCoverage.dailyPct,
-                    hasDailyBoundary: boundaryCoverage.hasDaily
+                    hasDailyBoundary: boundaryCoverage.hasDaily,
+                    dailyVisitedClients, dailyFromGeneralPct
                 };
             }).sort((a, b) => (a.supervisorName || '').localeCompare(b.supervisorName || '', 'ar')
                 || a.driverName.localeCompare(b.driverName, 'ar'));
@@ -25539,6 +26514,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <th>وقفات داخل الحدود العامة (بدون اليومية)</th>
                             <th>الالتزام بالحدود العامة</th>
                             <th>الالتزام بالحدود اليومية</th>
+                            <th>نسبة الزيارات اليومية من العامة</th>
                             <th>متوسط عدد عملاء اليوم الواحد</th>
                             <th>إجمالي العملاء</th>
                             <th>عملاء تمت زيارتهم</th>
@@ -25554,6 +26530,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const generalBoundaryClass = r.generalBoundaryPct >= 70 ? 'short' : (r.generalBoundaryPct >= 40 ? 'medium' : 'long');
                 const dailyBoundaryText = r.hasDailyBoundary ? `${r.dailyBoundaryPct}%` : '—';
                 const dailyBoundaryClass = r.hasDailyBoundary ? (r.dailyBoundaryPct >= 70 ? 'short' : (r.dailyBoundaryPct >= 40 ? 'medium' : 'long')) : '';
+                const dailyFromGeneralText = r.visitedClients > 0 ? `${r.dailyFromGeneralPct}%` : '—';
+                const dailyFromGeneralClass = r.visitedClients > 0 ? (r.dailyFromGeneralPct >= 70 ? 'short' : (r.dailyFromGeneralPct >= 40 ? 'medium' : 'long')) : '';
                 htmlContent += `
                     <tr style="background:${bg};">
                         <td>${index + 1}</td>
@@ -25571,6 +26549,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         <td style="color:#0d6efd;font-weight:600;">${r.stopsGeneralOnly}</td>
                         <td><span class="pdf-duration-badge ${generalBoundaryClass}">${r.generalBoundaryPct}%</span></td>
                         <td>${r.hasDailyBoundary ? `<span class="pdf-duration-badge ${dailyBoundaryClass}">${dailyBoundaryText}</span>` : dailyBoundaryText}</td>
+                        <td>${r.visitedClients > 0 ? `<span class="pdf-duration-badge ${dailyFromGeneralClass}">${dailyFromGeneralText}</span>` : dailyFromGeneralText}</td>
                         <td style="font-weight:600;">${r.avgDailyClientsCount}</td>
                         <td>${r.totalClients}</td>
                         <td style="color:#28a745;font-weight:600;">${r.visitedClients}</td>
@@ -25603,13 +26582,15 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const headers = ['#', 'اسم المندوب', 'رقم المركبة', 'المنطقة', 'القطاع', 'المشرف', 'الفترة المعروضة',
                 'عدد الفواتير', 'عدد الفواتير الحقيقية', 'عدد الفواتير الوهمية',
                 'وقفات داخل الحدود اليومية', 'وقفات خارج الحدود اليومية', 'وقفات داخل الحدود العامة (بدون اليومية)',
-                'الالتزام بالحدود العامة', 'الالتزام بالحدود اليومية', 'متوسط عدد عملاء اليوم الواحد', 'إجمالي العملاء',
+                'الالتزام بالحدود العامة', 'الالتزام بالحدود اليومية', 'نسبة الزيارات اليومية من العامة',
+                'متوسط عدد عملاء اليوم الواحد', 'إجمالي العملاء',
                 'عملاء تمت زيارتهم', 'نسبة التغطية'];
             const aoa = [[`القطاع(ات): ${namesLabel}`], headers];
             rows.forEach((r, i) => {
                 aoa.push([i + 1, r.driverName, r.vehicleNumber, r.areaName, r.sectorName, r.supervisorName, r.periodLabel,
                     r.invoicesCount, r.realInvoicesCount, r.fakeInvoicesCount, r.stopsInside, r.stopsOutside, r.stopsGeneralOnly, `${r.generalBoundaryPct}%`,
-                    r.hasDailyBoundary ? `${r.dailyBoundaryPct}%` : '—', r.avgDailyClientsCount, r.totalClients,
+                    r.hasDailyBoundary ? `${r.dailyBoundaryPct}%` : '—', r.visitedClients > 0 ? `${r.dailyFromGeneralPct}%` : '—',
+                    r.avgDailyClientsCount, r.totalClients,
                     r.visitedClients, `${r.coveragePct}%`]);
             });
             const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -28138,6 +29119,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // والتصدير معاً - لا يمس بيانات السيارة الأصلية المحفوظة في لوحة السيارات إطلاقاً) =====
         let invoicesReportDeletedIds = new Set();
         let lastInvoicesReportRows = [];
+        // ===== [جديد] مصفوفة حيّة تُغذّي أزرار "🔍 عرض" الخاصة بتفاصيل الفواتير (حقيقية/وهمية/غير مؤكدة) لكل
+        // مندوب عند التصدير كملف HTML مستقل - بنفس أسلوب visitsDetailLookup/eliteClientsInvoiceLookup =====
+        let invoicesReportDetailLookup = [];
 
         function computeInvoicesReportRows() {
             const rows = Object.values(vehiclesStore)
@@ -28149,6 +29133,14 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     const totalInvoices = (v.invoicesData || []).length;
                     const realCount = stats.realCount || 0;
                     const fakeCount = stats.fakeCount || 0;
+                    // ===== [إضافة] "فواتير غير مؤكدة" = فاتورة مطابقة لعميل حقيقي (بالكود و/أو الموقع) لكن بدون
+                    // وقفة/زيارة فعلية مرصودة للمندوب عند موقع هذا العميل - أي أن السيارة على الأرجح مرّت من أمام
+                    // العميل دون التوقف عنده. هذه بالضبط نفس القيمة اللي كانت "ناقصة" فرق بين (اجمالي - حقيقية -
+                    // وهمية) ولم تكن تظهر في الجدول قبل كده (كانت محسوبة فعلاً في computeVehicleInvoiceStatsForRange
+                    // كـ unconfirmedCount، لكن غير مُستخرَجة هنا). نفس هذا التصنيف هو أيضاً معنى "مطابق" (الفاتورة
+                    // طابقت عميلاً موجوداً بالفعل في المنطقة لكن المندوب لم يقف عنده) - لذلك عمود واحد فقط يكفي
+                    // ولا داعي لعمود منفصل مكرر بنفس الرقم بالضبط =====
+                    const unconfirmedCount = stats.unconfirmedCount || 0;
                     // نسبة الفواتير الحقيقية من "إجمالي" عدد الفواتير (وليس فقط من الفواتير المصنَّفة حقيقية/وهمية) -
                     // null (بلا نسبة) فقط لو لا توجد أي فواتير مرفوعة إطلاقاً لهذا المندوب
                     const realPct = totalInvoices > 0 ? Math.round((realCount / totalInvoices) * 100) : null;
@@ -28158,7 +29150,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         supervisorName: v.supervisorName || 'غير محدد',
                         sectorName: v.sectorName || 'غير محدد',
                         areaName: (v.areaName && v.areaName.trim()) ? v.areaName.trim() : 'غير محدد',
-                        totalInvoices, realCount, fakeCount, realPct
+                        totalInvoices, realCount, fakeCount, unconfirmedCount, realPct,
+                        // نفس نطاق المطابقة بالمتر المستخدَم فعلياً في حساب صفوف هذا المندوب بالذات - يُستخدم لاحقاً
+                        // عند فتح "عرض" التفصيلي حتى يتطابق عدد الصفوف المعروضة تماماً مع الأرقام في الجدول
+                        matchRangeMeters: proximityRangeV
                     };
                 });
             rows.sort((a, b) => (a.sectorName || '').localeCompare(b.sectorName || '', 'ar')
@@ -28177,10 +29172,36 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // HTML معاً. includeDelete اختياري (افتراضياً true): لو false (يُستخدم فقط عند التصدير) يُستبعد عمود
         // "🗑️ حذف" لأن زر الحذف يعتمد على مستمع حدث (addEventListener) لا يعمل داخل الملف المُصدَّر المستقل -
         // فالحذف يكون دائماً من داخل شاشة العرض الحيّة قبل التصدير، ويعكس التصدير نتيجته دائماً =====
-        function buildInvoicesReportTableHtml(rows, includeDelete) {
+        // زر "🔍 عرض" الصغير بجوار عدد كل فئة (حقيقية/وهمية/غير مؤكدة) - يفتح نافذة التفاصيل التفصيلية لنفس
+        // المندوب ونفس الفئة. غير مُدرَج إطلاقاً في التصدير المستقل (includeDelete === false) لأنه يعتمد على
+        // دالة حيّة (showInvoicesReportInvoiceDetail) غير موجودة في الملف المُصدَّر القائم بذاته
+        // mode: true = العرض الحيّ داخل الشاشة (زر يستدعي الدالة الحيّة showInvoicesReportInvoiceDetail مباشرة
+        // بالاعتماد على vehiclesStore)؛ 'export' = الملف المُصدَّر المستقل - يحسب تفاصيل هذه الفئة بالذات الآن
+        // (وقت التصدير، بينما لا تزال بيانات vehiclesStore متاحة) ويضيفها إلى invoicesReportDetailLookup، ثم
+        // يبني زراً يستدعي الدالة المستقلة showInvoicesReportDetailStandalone(index) التي تعمل من بيانات
+        // مضمَّنة (JSON) بذاتها بدون أي اتصال بالبرنامج الأصلي - بنفس أسلوب invoicesReportViewBtnHtml/
+        // visitsDetailLookup في تقرير الزيارات =====
+        function invoicesReportViewBtnHtml(row, category, mode) {
+            if (mode === 'export') {
+                const v = vehiclesStore[row.id];
+                const detail = (typeof computeVehicleInvoiceDetailRows === 'function' && v)
+                    ? computeVehicleInvoiceDetailRows(v, row.matchRangeMeters)
+                    : { real: [], fake: [], unconfirmed: [] };
+                const list = category === 'real' ? detail.real : (category === 'fake' ? detail.fake : (detail.unconfirmed || []));
+                const idx = invoicesReportDetailLookup.length;
+                invoicesReportDetailLookup.push({ driverName: row.driverName, category, rows: list });
+                return `<button type="button" onclick="showInvoicesReportDetailStandalone(${idx})" title="عرض تفاصيل هذه الفواتير" style="margin-inline-start:5px;background:#667eea;color:#fff;border:none;border-radius:6px;padding:2px 7px;font-size:10.5px;cursor:pointer;white-space:nowrap;">🔍 عرض</button>`;
+            }
+            if (mode !== true) return '';
+            return `<button type="button" onclick="showInvoicesReportInvoiceDetail('${row.id}','${category}')" title="عرض تفاصيل هذه الفواتير" style="margin-inline-start:5px;background:#667eea;color:#fff;border:none;border-radius:6px;padding:2px 7px;font-size:10.5px;cursor:pointer;white-space:nowrap;">🔍 عرض</button>`;
+        }
+
+        function buildInvoicesReportTableHtml(rows, mode) {
             if (rows.length === 0) {
                 return `<div style="padding:20px;text-align:center;color:#6c757d;">🚫 لا توجد بيانات فواتير مسجّلة بعد</div>`;
             }
+            const includeDelete = (mode === true);
+            if (mode === 'export') invoicesReportDetailLookup = [];
             return `
                 <table id="invoicesReportTable" style="width:100%;border-collapse:collapse;font-size:13px;">
                     <thead>
@@ -28193,8 +29214,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <th style="padding:8px;text-align:center;">🧾 اجمالي عدد الفواتير</th>
                             <th style="padding:8px;text-align:center;">✅ عدد الفواتير الحقيقية</th>
                             <th style="padding:8px;text-align:center;">❌ عدد الفواتير الوهمية</th>
+                            <th style="padding:8px;text-align:center;" title="فاتورة مطابقة (بالكود و/أو الموقع) لعميل حقيقي موجود بالمنطقة، لكن لم تُرصد وقفة/زيارة فعلية للمندوب عنده - أي أن مسار السيارة على الأرجح مرّ أمام العميل دون التوقف عنده">🟡 فواتير غير مؤكدة (مطابقة بدون وقفة)</th>
                             <th style="padding:8px;text-align:center;">📈 نسبة الفواتير الحقيقية</th>
-                            ${includeDelete !== false ? `<th class="avf-del-col" style="padding:8px;text-align:center;">🗑️ حذف</th>` : ''}
+                            ${includeDelete ? `<th class="avf-del-col" style="padding:8px;text-align:center;">🗑️ حذف</th>` : ''}
                         </tr>
                     </thead>
                     <tbody>
@@ -28206,13 +29228,174 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <td style="padding:7px;">${r.sectorName}</td>
                             <td style="padding:7px;">${r.areaName}</td>
                             <td style="padding:7px;text-align:center;font-weight:700;">${r.totalInvoices}</td>
-                            <td style="padding:7px;text-align:center;color:#28a745;font-weight:700;">${r.realCount}</td>
-                            <td style="padding:7px;text-align:center;color:#dc3545;font-weight:700;">${r.fakeCount}</td>
+                            <td style="padding:7px;text-align:center;color:#28a745;font-weight:700;white-space:nowrap;">${r.realCount}${invoicesReportViewBtnHtml(r, 'real', mode)}</td>
+                            <td style="padding:7px;text-align:center;color:#dc3545;font-weight:700;white-space:nowrap;">${r.fakeCount}${invoicesReportViewBtnHtml(r, 'fake', mode)}</td>
+                            <td style="padding:7px;text-align:center;color:#b8860b;font-weight:700;white-space:nowrap;">${r.unconfirmedCount}${invoicesReportViewBtnHtml(r, 'unconfirmed', mode)}</td>
                             <td style="padding:7px;text-align:center;color:${invoicesReportPctColor(r.realPct)};font-weight:700;">${r.realPct === null ? '—' : r.realPct + '%'}</td>
-                            ${includeDelete !== false ? `<td class="avf-del-col" style="padding:7px;text-align:center;"><button type="button" class="invoices-report-delete-btn" data-id="${r.id}" title="حذف هذا المندوب من التقرير">🗑️ حذف</button></td>` : ''}
+                            ${includeDelete ? `<td class="avf-del-col" style="padding:7px;text-align:center;"><button type="button" class="invoices-report-delete-btn" data-id="${r.id}" title="حذف هذا المندوب من التقرير">🗑️ حذف</button></td>` : ''}
                         </tr>`).join('')}
                     </tbody>
                 </table>`;
+        }
+
+        // ===== [جديد] بيانات كل فئة فواتير معروضة بنافذة التفاصيل المستقلة (حقيقية/وهمية/غير مؤكدة): العنوان +
+        // اللون + سبب التصنيف - نفس نصوص catInfo الموجودة داخل showInvoicesReportInvoiceDetail الحيّة أعلاه،
+        // مُستخرجة هنا كثابت مشترك حتى تستخدمه أيضاً نافذة "عرض" المستقلة الخاصة بالملف المُصدَّر =====
+        const INVOICES_REPORT_DETAIL_META = {
+            real: { label: '✅ الفواتير الحقيقية', color: '#28a745', reason: 'الفاتورة مطابقة لعميل حقيقي (بالكود و/أو الموقع)، وتم رصد وقفة/زيارة فعلية للمندوب عند نفس موقع هذا العميل خلال بياناته المحفوظة.' },
+            fake: { label: '❌ الفواتير الوهمية', color: '#dc3545', reason: 'لا يوجد تطابق كافٍ بين موقع تسجيل الفاتورة وموقع أي عميل حقيقي مسجّل بالمنطقة، أو أن كود العميل مطابق لكن موقع الفاتورة الفعلي بعيد عن موقعه الحقيقي.' },
+            unconfirmed: { label: '🟡 الفواتير غير المؤكدة (مطابقة)', color: '#b8860b', reason: 'الفاتورة مطابقة لعميل حقيقي موجود بالفعل بالمنطقة (بالكود و/أو الموقع)، لكن لم تُرصد أي وقفة/زيارة فعلية للمندوب عند موقعه - أي أن السيارة مرّت أمام العميل دون أن تتوقف عنده.' }
+        };
+
+        // ===== [جديد] نافذة "🔍 عرض" المنبثقة المستقلة الخاصة بتفاصيل فواتير مندوب/فئة معيّنة داخل الملف
+        // المُصدَّر لتقرير الفواتير - تعمل بذاتها من بيانات invoicesReportDetailLookup المضمَّنة (JSON) بدون أي
+        // اتصال بالبرنامج الأصلي، بنفس أسلوب ensureEliteClientInvoiceModal/showEliteClientInvoiceDetails تماماً =====
+        function ensureInvoicesReportDetailModal() {
+            let overlay = document.getElementById('invoicesReportDetailModalOverlay');
+            if (overlay) return overlay;
+            overlay = document.createElement('div');
+            overlay.id = 'invoicesReportDetailModalOverlay';
+            overlay.className = 'scv-modal-overlay';
+            overlay.style.zIndex = '10050';
+            overlay.onclick = function (e) { if (e.target === overlay) closeInvoicesReportDetailStandalone(); };
+            overlay.innerHTML = `
+                <div class="scv-modal" style="max-width:760px;">
+                    <div class="scv-modal-head">
+                        <h3 id="ivdModalTitle">🧾 تفاصيل الفواتير</h3>
+                        <button type="button" class="scv-modal-close" onclick="closeInvoicesReportDetailStandalone()">✕</button>
+                    </div>
+                    <div class="scv-modal-body" id="ivdModalBody"></div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            return overlay;
+        }
+        function showInvoicesReportDetailStandalone(lookupIdx) {
+            const entry = invoicesReportDetailLookup[lookupIdx];
+            if (!entry) return;
+            const overlay = ensureInvoicesReportDetailModal();
+            const esc = (str) => String(str == null ? '' : str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const meta = INVOICES_REPORT_DETAIL_META[entry.category] || INVOICES_REPORT_DETAIL_META.real;
+            const headEl = document.getElementById('ivdModalTitle');
+            if (headEl) headEl.textContent = `${meta.label} - ${entry.driverName}`;
+            const rows = entry.rows || [];
+            const rowsHtml = rows.map((item, i) => `
+                <tr>
+                    <td style="padding:6px;">${i + 1}</td>
+                    <td style="padding:6px;font-weight:700;">${esc(item.clientName || '—')}</td>
+                    <td style="padding:6px;font-size:11px;">${esc(item.clientCode || '—')}</td>
+                    <td style="padding:6px;font-size:11px;">${esc(item.invoiceCode || '—')}</td>
+                    <td style="padding:6px;font-weight:700;">${(item.value || 0).toLocaleString('ar-EG')} ج.م</td>
+                    <td style="padding:6px;text-align:center;">${item.distance !== null && item.distance !== undefined ? item.distance + ' م' : '—'}</td>
+                </tr>
+            `).join('');
+            const bodyEl = document.getElementById('ivdModalBody');
+            if (bodyEl) {
+                bodyEl.innerHTML = `
+                    <div style="font-size:12px;color:#495057;margin-bottom:10px;">${esc(meta.reason)}</div>
+                    ${rows.length ? `
+                    <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                        <thead>
+                            <tr style="background:${meta.color};color:#fff;">
+                                <th style="padding:6px;">#</th>
+                                <th style="padding:6px;">اسم العميل</th>
+                                <th style="padding:6px;">كود العميل</th>
+                                <th style="padding:6px;">رقم الفاتورة</th>
+                                <th style="padding:6px;">قيمة الفاتورة</th>
+                                <th style="padding:6px;">المسافة عن موقع العميل</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rowsHtml}</tbody>
+                    </table>
+                    </div>
+                    ` : `<div style="padding:16px;text-align:center;color:#6c757d;">🚫 لا توجد نتائج</div>`}
+                `;
+            }
+            overlay.classList.add('open');
+        }
+        function closeInvoicesReportDetailStandalone() {
+            const overlay = document.getElementById('invoicesReportDetailModalOverlay');
+            if (overlay) overlay.classList.remove('open');
+        }
+
+        // ===== [جديد] يبني CSS + JS اللازمين لعمل زر "🔍 عرض" المنبثق (تفاصيل الفواتير الحقيقية/الوهمية/غير
+        // المؤكدة) بذاته داخل ملف HTML المُصدَّر المستقل لتقرير الفواتير - بنفس أسلوب
+        // getEliteClientsInteractiveAssetsHtml/getVisitsReportInteractiveAssetsHtml بالضبط: (1) نفس CSS نوافذ
+        // scv-modal المستخدمة في باقي نوافذ "عرض" المنبثقة بالبرنامج، (2) بيانات invoicesReportDetailLookup
+        // الخاصة بهذا التصدير بالذات كمصفوفة JSON ثابتة، (3) نص الدوال نفسها مأخوذ حرفياً عبر toString() =====
+        function getInvoicesReportInteractiveAssetsHtml(detailLookupData) {
+            return `
+                <style>
+                    .scv-modal-overlay {
+                        position: fixed; inset: 0; background: rgba(15,23,42,0.6);
+                        display: none; align-items: center; justify-content: center;
+                        z-index: 9998; padding: 16px; backdrop-filter: blur(2px);
+                    }
+                    .scv-modal-overlay.open { display: flex; }
+                    .scv-modal {
+                        background: #fff; color: #212529; width: 100%; max-width: 640px; border-radius: 14px;
+                        box-shadow: 0 20px 50px rgba(0,0,0,0.35); font-family: 'Tajawal','Cairo',sans-serif;
+                        max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;
+                    }
+                    .scv-modal-head {
+                        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                        padding: 14px 18px; background: #667eea; color: #fff;
+                    }
+                    .scv-modal-head h3 { font-size: 14px; font-weight: 800; margin: 0; }
+                    .scv-modal-close {
+                        background: rgba(255,255,255,0.2); border: none; color: #fff;
+                        width: 28px; height: 28px; border-radius: 8px; cursor: pointer; font-size: 13px; flex-shrink: 0;
+                    }
+                    .scv-modal-close:hover { background: rgba(255,255,255,0.35); }
+                    .scv-modal-body { padding: 14px 18px; overflow-y: auto; }
+                    @media print { .scv-modal-overlay { display: none !important; } }
+                </style>
+                <script>
+                    let invoicesReportDetailLookup = ${JSON.stringify(detailLookupData)};
+                    const INVOICES_REPORT_DETAIL_META = ${JSON.stringify(INVOICES_REPORT_DETAIL_META)};
+                    ${ensureInvoicesReportDetailModal.toString()}
+                    ${showInvoicesReportDetailStandalone.toString()}
+                    ${closeInvoicesReportDetailStandalone.toString()}
+                <\/script>
+            `;
+        }
+
+        // ===== يعرض تفاصيل فواتير مندوب معيّن لفئة واحدة بعينها (حقيقية/وهمية/غير مؤكدة) عند الضغط على زر
+        // "🔍 عرض" داخل "تقرير الفواتير" - يعيد استخدام نفس نافذة "تفاصيل" العامة (fullReportDetailModal)
+        // ونفس دالة حساب التفاصيل (computeVehicleInvoiceDetailRows) المستخدمتين أصلاً في "التقرير الشامل"،
+        // بنفس نطاق المطابقة بالمتر المحفوظ لهذا المندوب بالذات (r.matchRangeMeters) حتى يتطابق عدد صفوف
+        // النافذة تماماً مع الرقم الظاهر في عمود الجدول، مع إضافة عمود "السبب/الملحوظة" يوضح سبب التصنيف =====
+        function showInvoicesReportInvoiceDetail(vehicleId, category) {
+            const row = (lastInvoicesReportRows || []).find(r => String(r.id) === String(vehicleId));
+            const v = vehiclesStore[vehicleId];
+            if (!row || !v) { showToast('⚠️ تعذّر إيجاد بيانات هذا المندوب', 'error'); return; }
+            const detail = (typeof computeVehicleInvoiceDetailRows === 'function')
+                ? computeVehicleInvoiceDetailRows(v, row.matchRangeMeters)
+                : { real: [], fake: [], unconfirmed: [] };
+            const list = category === 'real' ? detail.real : (category === 'fake' ? detail.fake : (detail.unconfirmed || []));
+            const catInfo = {
+                real: { label: '✅ الفواتير الحقيقية', reason: 'الفاتورة مطابقة لعميل حقيقي (بالكود و/أو الموقع)، وتم رصد وقفة/زيارة فعلية للمندوب عند نفس موقع هذا العميل خلال بياناته المحفوظة.' },
+                fake: { label: '❌ الفواتير الوهمية', reason: 'لا يوجد تطابق كافٍ بين موقع تسجيل الفاتورة وموقع أي عميل حقيقي مسجّل بالمنطقة، أو أن كود العميل مطابق لكن موقع الفاتورة الفعلي بعيد عن موقعه الحقيقي.' },
+                unconfirmed: { label: '🟡 الفواتير غير المؤكدة (مطابقة)', reason: 'الفاتورة مطابقة لعميل حقيقي موجود بالفعل بالمنطقة (بالكود و/أو الموقع)، لكن لم تُرصد أي وقفة/زيارة فعلية للمندوب عند موقعه - أي أن السيارة مرّت أمام العميل دون أن تتوقف عنده.' }
+            }[category] || { label: 'تفاصيل', reason: '—' };
+            const title = `${catInfo.label} - ${row.driverName}`;
+            const headers = ['اسم العميل', 'كود العميل', 'رقم الفاتورة', 'قيمة الفاتورة', 'المسافة عن موقع العميل', 'السبب/الملحوظة'];
+            const dataRows = list.map(item => [
+                item.clientName || '—', item.clientCode || '—', item.invoiceCode || '—',
+                `${(item.value || 0).toLocaleString('ar-EG')} ج.م`,
+                item.distance !== null && item.distance !== undefined ? item.distance + ' م' : '—',
+                catInfo.reason
+            ]);
+            lastFullReportDetailData = { title, headers, rows: dataRows };
+            const titleEl = document.getElementById('fullReportDetailTitle');
+            if (titleEl) titleEl.textContent = title;
+            const summaryEl = document.getElementById('fullReportDetailSummary');
+            if (summaryEl) summaryEl.innerHTML = `عدد النتائج: <b>${dataRows.length}</b>`;
+            const wrap = document.getElementById('fullReportDetailTableWrap');
+            if (wrap) wrap.innerHTML = buildFullReportDetailTableHtml(headers, dataRows);
+            const modal = document.getElementById('fullReportDetailModal');
+            if (modal) modal.classList.add('active');
         }
 
         // يعرض/يعيد رسم شاشة "تقرير الفواتير" بالكامل (الملخص + الجدول)، ويربط أزرار الحذف، ثم يفعّل فلتر
@@ -28223,7 +29406,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const wrap = document.getElementById('invoicesReportTableWrap');
             if (summary) {
                 summary.innerHTML = rows.length > 0
-                    ? `<p>عدد المناديب: <b>${rows.length}</b> &nbsp;|&nbsp; 🧾 إجمالي الفواتير: <b>${rows.reduce((s, r) => s + r.totalInvoices, 0)}</b> &nbsp;|&nbsp; ✅ حقيقية: <b style="color:#28a745;">${rows.reduce((s, r) => s + r.realCount, 0)}</b> &nbsp;|&nbsp; ❌ وهمية: <b style="color:#dc3545;">${rows.reduce((s, r) => s + r.fakeCount, 0)}</b></p>`
+                    ? `<p>عدد المناديب: <b>${rows.length}</b> &nbsp;|&nbsp; 🧾 إجمالي الفواتير: <b>${rows.reduce((s, r) => s + r.totalInvoices, 0)}</b> &nbsp;|&nbsp; ✅ حقيقية: <b style="color:#28a745;">${rows.reduce((s, r) => s + r.realCount, 0)}</b> &nbsp;|&nbsp; ❌ وهمية: <b style="color:#dc3545;">${rows.reduce((s, r) => s + r.fakeCount, 0)}</b> &nbsp;|&nbsp; 🟡 غير مؤكدة: <b style="color:#b8860b;">${rows.reduce((s, r) => s + r.unconfirmedCount, 0)}</b></p>`
                     : '';
             }
             if (wrap) {
@@ -28333,6 +29516,12 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const totalInvoices = lastInvoicesReportRows.reduce((s, r) => s + r.totalInvoices, 0);
             const totalReal = lastInvoicesReportRows.reduce((s, r) => s + r.realCount, 0);
             const totalFake = lastInvoicesReportRows.reduce((s, r) => s + r.fakeCount, 0);
+            const totalUnconfirmed = lastInvoicesReportRows.reduce((s, r) => s + r.unconfirmedCount, 0);
+            // ===== بناء الجدول بوضع 'export': يملأ invoicesReportDetailLookup الحيّة ببيانات هذا التصدير بالذات
+            // (نفس ترتيب lastInvoicesReportRows المعروض)، ثم نأخذ نسخة منها فوراً لتضمينها كبيانات ثابتة (JSON)
+            // داخل الملف المُصدَّر نفسه عبر getInvoicesReportInteractiveAssetsHtml - بنفس أسلوب exportEliteClientsHTML =====
+            const tableHtml = buildInvoicesReportTableHtml(lastInvoicesReportRows, 'export');
+            const detailLookupSnapshot = invoicesReportDetailLookup.slice();
             const htmlContent = `
                 <div class="pdf-header pdf-logo-header">
                     <img src="${logoSrc}" class="pdf-logo-img" alt="شعار">
@@ -28344,10 +29533,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     </div>
                 </div>
                 <div class="pdf-vehicle-info">
-                    👥 عدد المناديب: <b>${lastInvoicesReportRows.length}</b> &nbsp;|&nbsp; 🧾 إجمالي الفواتير: <b>${totalInvoices}</b> &nbsp;|&nbsp; ✅ حقيقية: <b>${totalReal}</b> &nbsp;|&nbsp; ❌ وهمية: <b>${totalFake}</b>
+                    👥 عدد المناديب: <b>${lastInvoicesReportRows.length}</b> &nbsp;|&nbsp; 🧾 إجمالي الفواتير: <b>${totalInvoices}</b> &nbsp;|&nbsp; ✅ حقيقية: <b>${totalReal}</b> &nbsp;|&nbsp; ❌ وهمية: <b>${totalFake}</b> &nbsp;|&nbsp; 🟡 غير مؤكدة: <b>${totalUnconfirmed}</b>
                 </div>
                 <div class="pdf-table-container">
-                    ${buildInvoicesReportTableHtml(lastInvoicesReportRows, false)}
+                    ${tableHtml}
                 </div>
                 <div class="pdf-footer">
                     تم إنشاء التقرير بواسطة برنامج تحليل مسارات KML و GPX - أحمد علي
@@ -28355,6 +29544,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <span style="font-size:8px;">${new Date().toLocaleString('ar-EG')}</span>
                 </div>
                 ${getInvoicesReportFilterAssetsHtml()}
+                ${getInvoicesReportInteractiveAssetsHtml(detailLookupSnapshot)}
             `;
             downloadStandaloneHTMLReport(htmlContent, '🧾 تقرير الفواتير', 'تقرير_الفواتير');
         }
@@ -28367,11 +29557,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 return;
             }
             const headers = ['#', 'اسم المندوب', 'اسم المشرف', 'اسم القطاع', 'اسم المنطقة',
-                'اجمالي عدد الفواتير', 'عدد الفواتير الحقيقية', 'عدد الفواتير الوهمية', 'نسبة الفواتير الحقيقية'];
+                'اجمالي عدد الفواتير', 'عدد الفواتير الحقيقية', 'عدد الفواتير الوهمية', 'فواتير غير مؤكدة (مطابقة بدون وقفة)', 'نسبة الفواتير الحقيقية'];
             const aoa = [headers];
             lastInvoicesReportRows.forEach((r, i) => {
                 aoa.push([i + 1, r.driverName, r.supervisorName, r.sectorName, r.areaName,
-                    r.totalInvoices, r.realCount, r.fakeCount, r.realPct === null ? '—' : `${r.realPct}%`]);
+                    r.totalInvoices, r.realCount, r.fakeCount, r.unconfirmedCount, r.realPct === null ? '—' : `${r.realPct}%`]);
             });
             const ws = XLSX.utils.aoa_to_sheet(aoa);
             const wb = XLSX.utils.book_new();
@@ -28393,13 +29583,22 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         let uploadedVisitsFileName = '';
         let visitsReportMatchRangeMeters = 40;
         let lastVisitsReportRows = [];
+        // ===== [جديد] قائمة "الزيارات الخام" (قبل تصنيفها حقيقية/وهمية) لكل مندوب - تُملأ في كل استدعاء لـ
+        // computeVisitsReportRows، وتُستخدم عند تصدير "تقرير الزيارات" لتضمين زر "نطاق احتساب الزيارة الحقيقية
+        // (متر)" داخل الملف المُصدَّر نفسه فيقدر يعيد التصنيف فوراً بأي نطاق دون أي اتصال بالبرنامج الأصلي =====
+        let lastVisitsReportRawEntriesByDriver = [];
         let visitsDetailLookup = []; // ===== مصفوفة حيّة تُغذّي أزرار "عرض" الخاصة بتفاصيل الزيارات الحقيقية/الوهمية لكل مندوب (نفس أسلوب eliteClientsInvoiceLookup) =====
         // ===== [جديد] حالة النافذة الفرعية (المستوى الثاني) الخاصة بزيارات عميل واحد بعينه: مجموعات العملاء
         // المعروضة حالياً في نافذة "تفاصيل الزيارات" المفتوحة (بعد الدمج حسب العميل)، ونوعها (حقيقية/وهمية)
         // واسم المندوب صاحبها - تُقرأ عند الضغط على زر "عرض" الخاص بعميل معيّن =====
         let currentVisitsClientGroups = [];
         let currentVisitsDetailIsFake = false;
+        let currentVisitsDetailColor = '#198754'; // ===== [جديد] لون نوع الزيارة المعروض حالياً (حقيقية/وهمية/إيجابية/سلبية) =====
         let currentVisitsDetailDriverName = '';
+        // ===== [جديد] آخر قائمة صفوف زيارات فردية تم عرضها (من renderVisitsRowsDetailTable أو
+        // renderVisitsRepeatRowsTable) - يعتمد عليها زر "عرض" الخاص بعمود "تطابق وقفة السيارة" للوصول لبيانات
+        // الصف الصحيح حسب رقمه (index) داخل آخر جدول تفاصيل مرسوم فعلياً =====
+        let currentStopMatchRowsList = [];
 
         // بيحوّل قيمة تاريخ/وقت مهما كان شكلها في الإكسيل لكائن Date صحيح - نفس المنطق المستخدم بالضبط في toDate
         // الخاصة بـ parseInvoicesExcel أعلاه (كائن Date جاهز، أو نص، أو رقم تسلسلي احتياطي)
@@ -28423,6 +29622,163 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         function visitsDayKey(d) {
             if (!d || isNaN(d.getTime())) return '';
             return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+        }
+
+        // ===== [جديد] "تطابق وقفة السيارة": يحوّل أي تاريخ (زيارة أو يوم مسار) لنفس مفتاح "يوم" المستخدم في
+        // visitsDayKey بالضبط (بدون أصفار بادئة) حتى تتطابق مفاتيح تاريخ الزيارة مع مفاتيح أيام مسار السيارة
+        // المسجَّلة بلوحة السيارات دون أي اختلاف في الصياغة =====
+        function stopMatchDayKey(d) {
+            if (!d) return '';
+            const dt = (d instanceof Date) ? d : new Date(d);
+            if (isNaN(dt.getTime())) return '';
+            return dt.getFullYear() + '-' + (dt.getMonth() + 1) + '-' + dt.getDate();
+        }
+
+        // ===== [جديد] يبني فهرس "تاريخ اليوم → كل أيام مسار هذا المندوب المسجَّلة بهذا التاريخ" (غالباً يوم
+        // واحد، لكن يُدعم أكثر من ملف/يوم بنفس التاريخ احتياطاً) - يُبنى مرة واحدة فقط لكل مندوب (وليس لكل
+        // زيارة) لتوفير الأداء عند فحص عدد كبير من الزيارات =====
+        function buildStopMatchDaysIndex(vehicle) {
+            const index = new Map();
+            if (!vehicle || !vehicle.allDaysData) return index;
+            Object.values(vehicle.allDaysData).forEach(day => {
+                if (!day) return;
+                const dk = stopMatchDayKey(day.startTime);
+                if (!dk) return;
+                if (!index.has(dk)) index.set(dk, []);
+                index.get(dk).push(day);
+            });
+            return index;
+        }
+
+        // ===== [جديد] "تطابق وقفة السيارة" الخاص بزيارة واحدة: يبحث في مسار GPS الفعلي لسيارة المندوب في نفس
+        // تاريخ الزيارة (من daysIndex المبني سلفاً) عن أقرب "وقفة" مسجَّلة من موقع الزيارة (لوكيشن الزيارة كما
+        // ورد بشيت الزيارات نفسه، وليس لوكيشن العميل المسجَّل) ضمن نطاق rangeMeters؛ فإن لم توجد، يبحث هل مرّ
+        // مسار حركة السيارة (كل نقاط GPS المسجَّلة بذلك اليوم) بجوار هذا الموقع دون أن يقف فعلياً؛ فإن لم يقترب
+        // المسار إطلاقاً (أو لم يوجد مسار مسجَّل أصلاً لهذا التاريخ)، تُعتبر "لم تمر السيارة اساساً" - ثلاث حالات
+        // بالضبط بحسب الطلب: 1) يوجد وقفة فعلية  2) مسار السيارة مرّ ولكن بدون وقفة  3) لا يوجد وقفة ولا مرّت
+        // السيارة اساساً =====
+        // ===== [تعديل مطلوب] فُصل الفحص إلى دالتين: (1) computeStopMatchRawMeasurement تبحث فعلياً في مسار GPS
+        // (أقرب وقفة + أقرب نقطة مرور) وتُرجع "قياسات خام" لا علاقة لها بنطاق المتر المستخدم، (2)
+        // computeVisitStopMatchInfo تأخذ هذه القياسات الجاهزة + نطاق المتر الحالي وتقرر الحالة/النص فقط بعملية
+        // حسابية بسيطة دون أي حاجة للوصول لمسار GPS الخام. الفائدة: تصدير الملف المستقل يقدر يخزّن القياسات
+        // الخام فقط (أرقام صغيرة) بدل بيانات GPS الضخمة، ويعيد حساب النتيجة فوراً عند تغيير "نطاق الوقفة" داخل
+        // الملف المُصدَّر نفسه دون أي اتصال بالبرنامج الأصلي =====
+        function computeStopMatchRawMeasurement(lat, lon, visitDate, daysIndex) {
+            if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+                return { hasCoords: false, noTrackDay: false, nearestStopDist: null, nearestStopStartText: null, nearestStopEndText: null, nearestStopDurMin: null, trackMinDist: null };
+            }
+            const dk = stopMatchDayKey(visitDate);
+            const days = (dk && daysIndex) ? (daysIndex.get(dk) || []) : [];
+            if (days.length === 0) {
+                return { hasCoords: true, noTrackDay: true, nearestStopDist: null, nearestStopStartText: null, nearestStopEndText: null, nearestStopDurMin: null, trackMinDist: null };
+            }
+            let nearestStopDist = null, nearestStop = null;
+            days.forEach(day => {
+                (day.stops || []).forEach(stop => {
+                    if (stop.isGapStop) return;
+                    const coord = stop.avgCoord || stop.startCoord;
+                    if (!coord) return;
+                    const d = haversineDistance(lat, lon, coord[0], coord[1]);
+                    if (nearestStopDist === null || d < nearestStopDist) { nearestStopDist = d; nearestStop = stop; }
+                });
+            });
+            // ===== أقرب نقطة مرور فعلية من كل مسار حركة السيارة بهذا اليوم (أدنى مسافة حقيقية، وليس أول نقطة
+            // ضمن نطاق مؤقت) حتى تبقى القياسة صحيحة أياً كان النطاق المطلوب مقارنتها به لاحقاً =====
+            let trackMinDist = null;
+            days.forEach(day => {
+                const coords = day.coordinates || [];
+                for (let i = 0; i < coords.length; i++) {
+                    const c = coords[i];
+                    if (!c || c.length < 2 || (c[0] === 0 && c[1] === 0)) continue;
+                    const d = haversineDistance(lat, lon, c[0], c[1]);
+                    if (trackMinDist === null || d < trackMinDist) trackMinDist = d;
+                }
+            });
+            return {
+                hasCoords: true, noTrackDay: false,
+                nearestStopDist: nearestStopDist,
+                nearestStopStartText: (nearestStop && nearestStop.startTime) ? new Date(nearestStop.startTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—',
+                nearestStopEndText: (nearestStop && nearestStop.endTime) ? new Date(nearestStop.endTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—',
+                nearestStopDurMin: nearestStop ? (nearestStop.durationMinutes || Math.round((nearestStop.duration || 0) / 60)) : null,
+                trackMinDist: trackMinDist
+            };
+        }
+
+        // ===== [تعديل مطلوب] تأخذ القياسات الخام الجاهزة (من computeStopMatchRawMeasurement) + نطاق المتر
+        // الحالي، وتُرجع الحالة/النص فقط - بلا أي وصول لمسار GPS. المعامل refKind: 'client' يعني أن القياسات
+        // محسوبة أصلاً بمقارنة موقع العميل الحقيقي المسجَّل بالنظام (تُستخدم للزيارات الوهمية تحديداً)، بينما
+        // 'visit' يعني أنها محسوبة بمقارنة موقع الزيارة كما ورد بشيت الزيارات (الزيارات الحقيقية، أو الوهمية
+        // التي لا يُعرف لها موقع عميل حقيقي مسجَّل إطلاقاً). النص يوضّح صراحة: هل مرّت السيارة من أمام العميل
+        // (بوقفة أو بدونها) أم لم تمر من أمامه إطلاقاً =====
+        function computeVisitStopMatchInfo(measure, rangeMeters, refKind) {
+            const isClientRef = (refKind === 'client');
+            const refLabel = isClientRef ? 'موقع العميل الحقيقي المسجَّل' : 'موقع هذه الزيارة';
+            if (!measure || !measure.hasCoords) {
+                return {
+                    status: 'none', label: '⚪ غير متاح',
+                    detail: isClientRef
+                        ? 'لا تتوفر إحداثيات مسجَّلة لموقع هذا العميل فعلياً بالنظام، فتعذّر فحص هل مرّت السيارة من أمامه أم لا (تم عرض موقع الزيارة كما ورد بالشيت فقط كمعلومة تقريبية)'
+                        : 'لا تتوفر إحداثيات كافية لهذه الزيارة لفحص تطابق الوقفة'
+                };
+            }
+            if (measure.noTrackDay) {
+                return {
+                    status: 'none', label: isClientRef ? '❌ لم تمر السيارة من أمام العميل اساساً' : '❌ لم تمر السيارة اساساً',
+                    detail: `لا يوجد مسار GPS مسجَّل لسيارة هذا المندوب في تاريخ هذه الزيارة، فلا يمكن التأكد هل مرّ من أمام ${refLabel} أم لا`
+                };
+            }
+            if (measure.nearestStopDist !== null && measure.nearestStopDist <= rangeMeters) {
+                const durMin = measure.nearestStopDurMin || 0;
+                return {
+                    status: 'stop', label: '✅ يوجد وقفة فعلية',
+                    detail: `تم رصد وقفة فعلية لسيارة المندوب من الساعة ${measure.nearestStopStartText} إلى ${measure.nearestStopEndText} (${durMin} دقيقة تقريباً)، على بعد ${Math.round(measure.nearestStopDist)} م من ${refLabel}${isClientRef ? ' - أي أن المندوب مرّ بالفعل أمام العميل وتوقف عنده' : ''}`
+                };
+            }
+            if (measure.trackMinDist !== null && measure.trackMinDist <= rangeMeters) {
+                return {
+                    status: 'passed', label: isClientRef ? '🟡 مرّ من أمام العميل بدون وقفة' : '🟡 مرّ المسار بدون وقفة',
+                    detail: `مسار حركة سيارة المندوب مرّ فعلاً على بعد ${Math.round(measure.trackMinDist)} م من ${refLabel} في نفس التاريخ، لكن دون تسجيل أي وقفة فعلية هناك${isClientRef ? ' - أي أن المندوب مرّ من أمام العميل بالفعل لكنه لم يتوقف عنده، لذلك احتُسبت الزيارة وهمية رغم مروره بالقرب منه' : ''}`
+                };
+            }
+            return {
+                status: 'none', label: isClientRef ? '❌ لم تمر السيارة من أمام العميل اساساً' : '❌ لم تمر السيارة اساساً',
+                detail: isClientRef
+                    ? `مسار حركة سيارة المندوب في نفس تاريخ هذه الزيارة لم يقترب إطلاقاً من ${refLabel} (لا يوجد وقفة ولا حتى مرور بالقرب منه) - أي أن المندوب لم يمر من أمام العميل نهائياً في هذا التاريخ`
+                    : 'مسار حركة سيارة المندوب في نفس تاريخ هذه الزيارة لم يقترب إطلاقاً من موقعها (لا يوجد وقفة ولا مرور)'
+            };
+        }
+
+        // ===== [جديد] تختار قياس "تطابق وقفة السيارة" الصحيح لصف زيارة واحد حسب حالته الحالية (حقيقية/وهمية)
+        // ثم تحسب الحالة/النص بنطاق المتر الممرَّر - تُستخدم عند الحساب الأول، وأيضاً عند إعادة تصنيف الزيارات
+        // بنطاق مختلف (سواء داخل الشاشة الحيّة أو داخل الملف المُصدَّر المستقل نفسه) =====
+        function pickStopMatchForVisitEntry(entry, isReal, rangeMeters) {
+            if (isReal || !entry.stopMeasureClient) return computeVisitStopMatchInfo(entry.stopMeasureVisit, rangeMeters, 'visit');
+            return computeVisitStopMatchInfo(entry.stopMeasureClient, rangeMeters, 'client');
+        }
+
+        // ===== [جديد] يبني صف مندوب كامل (زيارات حقيقية/وهمية/إيجابية/سلبية/عملاء متكررين) من قائمة "زيارات
+        // خام" جاهزة سلفاً (بمسافتها وقياسات تطابق الوقفة الخام) + نطاق متر معيّن - نفس المنطق المستخدم داخل
+        // computeVisitsReportRows بالضبط، لكن كدالة مستقلة قابلة لإعادة الاستخدام عند تغيير النطاق لاحقاً (سواء
+        // في الشاشة الحيّة أو داخل الملف المُصدَّر المستقل عبر زر "نطاق احتساب الزيارة الحقيقية") =====
+        function buildVisitsReportRowFromEntries(driverName, driverCode, sectorName, entries, rangeMeters) {
+            const realRows = [], fakeRows = [];
+            (entries || []).forEach(e => {
+                const isReal = (typeof e.distance === 'number') ? (e.distance <= rangeMeters) : false;
+                const stopMatch = pickStopMatchForVisitEntry(e, isReal, rangeMeters);
+                const visitRow = Object.assign({}, e, { isReal: isReal, stopMatch: stopMatch });
+                if (isReal) realRows.push(visitRow); else fakeRows.push(visitRow);
+            });
+            const positiveRows = realRows.filter(r => typeof r.value === 'number' && !isNaN(r.value) && r.value > 0);
+            const negativeRows = realRows.filter(r => !(typeof r.value === 'number' && !isNaN(r.value) && r.value > 0));
+            const repeatClientGroups = groupRepeatVisitsByClient(realRows.concat(fakeRows)).filter(g => g.count > 1);
+            return {
+                driverName, driverCode, sectorName,
+                realCount: realRows.length, fakeCount: fakeRows.length,
+                realRows, fakeRows,
+                positiveCount: positiveRows.length, negativeCount: negativeRows.length,
+                positiveRows, negativeRows,
+                repeatClientsCount: repeatClientGroups.length, repeatClientGroups
+            };
         }
 
         // ===== توحيد "كود العميل" كما يرد بشيت الزيارات (أحياناً بصيغة "0610023105|3000" - كود ثم رمز فرعي بعد
@@ -28597,6 +29953,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // عملاء هذا المندوب المسجَّلة (v.clientsData) ومقارنة المسافة بينهما بنطاق rangeMeters =====
         function computeVisitsReportRows(rangeMetersOverride) {
             const rangeMeters = (typeof rangeMetersOverride === 'number' && rangeMetersOverride >= 0) ? rangeMetersOverride : visitsReportMatchRangeMeters;
+            lastVisitsReportRawEntriesByDriver = [];
             if (!uploadedVisitsRows || uploadedVisitsRows.length === 0) return [];
 
             const vehiclesByRepCode = new Map();
@@ -28638,6 +29995,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const driverCode = matchedVehicle.driverCode || repRows[0].repCode || '—';
                 const sectorName = matchedVehicle.sectorName || 'غير محدد';
                 const clients = matchedVehicle.clientsData || [];
+                // ===== [جديد] فهرس أيام مسار هذا المندوب (لفحص "تطابق وقفة السيارة") - يُبنى مرة واحدة فقط =====
+                const stopDaysIndex = buildStopMatchDaysIndex(matchedVehicle);
 
                 // ===== [تعديل مطلوب] تُجمَّع كل الأصناف/الفواتير التي نزلت لنفس العميل في نفس اليوم باعتبارها
                 // "زيارة واحدة" فعلية (المفتاح = كود العميل الموحَّد + تاريخ الزيارة باليوم فقط)، بدل الاعتماد
@@ -28652,7 +30011,12 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     ordersMap.get(orderKey).push(r);
                 });
 
-                const realRows = [], fakeRows = [];
+                // ===== [تعديل مطلوب] نبني أولاً قائمة "زيارات خام" لهذا المندوب (مسافتها عن العميل + قياسات
+                // تطابق الوقفة الخام لموقع الزيارة ولموقع العميل الحقيقي معاً - بلا أي قرار حقيقية/وهمية بعد)،
+                // ثم نُفوّض تصنيفها الفعلي إلى buildVisitsReportRowFromEntries حسب rangeMeters الحالي. هذا
+                // يسمح لاحقاً بإعادة التصنيف فوراً بنطاق مختلف (زر "نطاق احتساب الزيارة الحقيقية") دون إعادة
+                // البحث في مسار GPS من جديد =====
+                const entries = [];
                 ordersMap.forEach(orderRows => {
                     const first = orderRows[0];
                     const qtyTotal = orderRows.reduce((s, x) => s + ((typeof x.qty === 'number' && !isNaN(x.qty)) ? x.qty : 0), 0);
@@ -28661,10 +30025,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
 
                     const ccode = normalizeVisitClientCode(first.clientCode);
                     const matchedClient = ccode ? (clients.find(c => normalizeVisitClientCode(c.code) === ccode) || null) : null;
-                    let distance = null, isReal = false;
+                    let distance = null;
                     if (matchedClient && typeof matchedClient.lat === 'number' && typeof matchedClient.lon === 'number' && typeof first.lat === 'number' && typeof first.lon === 'number') {
                         distance = Math.round(haversineDistance(first.lat, first.lon, matchedClient.lat, matchedClient.lon));
-                        isReal = distance <= rangeMeters;
                     }
                     // ===== [جديد] الزيارة "الوهمية" (matchedClient غير موجود ضمن عملاء نفس المندوب) قد تكون لعميل
                     // مسجَّل بالنظام فعلاً لكن عند مندوب آخر - نحسب المسافة لموقعه الحقيقي المسجَّل (من الفهرس
@@ -28675,33 +30038,38 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         fallbackClient = globalClientIndex.get(ccode);
                         distance = Math.round(haversineDistance(first.lat, first.lon, fallbackClient.lat, fallbackClient.lon));
                     }
-                    const visitRow = {
+                    const visitDate = first.startTime || first.transDate || null;
+                    // ===== [تعديل مطلوب] "تطابق وقفة السيارة": للزيارات الحقيقية تتم المقارنة بموقع الزيارة الفعلي
+                    // كما ورد بشيت الزيارات (أساساً قريب من العميل بالفعل). أما الزيارات الوهمية فيجب أن تُقارَن
+                    // بموقع العميل الحقيقي المسجَّل بالنظام نفسه (وليس بموقع الزيارة/الفاتورة كما ورد بالشيت، الذي
+                    // قد يكون بعيداً أو غير دقيق) - نستخدم موقع matchedClient إن وُجد (كود مطابق لكن بعيد عن نطاق
+                    // الاحتساب)، وإلا fallbackClient (نفس الكود مسجَّل عند مندوب آخر). نحسب قياسات الوقفة الخام
+                    // لكلا الموقعين هنا (وليس فقط الحالة الحالية) حتى تبقى صحيحة لو تغيّر التصنيف لاحقاً بنطاق آخر =====
+                    const clientLocSrc = matchedClient || fallbackClient;
+                    const hasClientLoc = !!(clientLocSrc && typeof clientLocSrc.lat === 'number' && typeof clientLocSrc.lon === 'number');
+                    const stopMeasureVisit = computeStopMatchRawMeasurement(first.lat, first.lon, visitDate, stopDaysIndex);
+                    const stopMeasureClient = hasClientLoc ? computeStopMatchRawMeasurement(clientLocSrc.lat, clientLocSrc.lon, visitDate, stopDaysIndex) : null;
+                    entries.push({
                         clientName: first.clientName || (matchedClient ? matchedClient.name : '') || (fallbackClient ? fallbackClient.name : '') || 'غير معروف',
                         clientCode: first.clientCode || (matchedClient ? matchedClient.code : '') || (fallbackClient ? fallbackClient.code : '') || '—',
                         items: items,
                         qty: qtyTotal,
                         value: valueTotal,
-                        date: first.startTime || first.transDate || null,
+                        date: visitDate,
                         distance: distance,
-                        // ===== [جديد] كود العميل الموحَّد (لتجميع زيارات نفس العميل) + حالة الزيارة (حقيقية/وهمية) =====
+                        // ===== [جديد] كود العميل الموحَّد (لتجميع زيارات نفس العميل) =====
                         clientKey: ccode,
-                        isReal: isReal
-                    };
-                    if (isReal) realRows.push(visitRow); else fakeRows.push(visitRow);
+                        // ===== [جديد] قياسات "تطابق وقفة السيارة" الخام (بلا نطاق مطبَّق بعد) =====
+                        stopMeasureVisit: stopMeasureVisit,
+                        stopMeasureClient: stopMeasureClient
+                    });
                 });
 
-                // ===== [جديد] العملاء الذين تمت زيارتهم أكثر من مرة (أكثر من كود اوردر واحد لنفس العميل) عند هذا
-                // المندوب - تُحسب من كل زياراته (حقيقية + وهمية معاً)، وتُحفظ حالة كل زيارة لعرضها في التفاصيل =====
-                const repeatClientGroups = groupRepeatVisitsByClient(realRows.concat(fakeRows)).filter(g => g.count > 1);
-
-                rows.push({
-                    driverName, driverCode, sectorName,
-                    realCount: realRows.length,
-                    fakeCount: fakeRows.length,
-                    realRows, fakeRows,
-                    repeatClientsCount: repeatClientGroups.length,
-                    repeatClientGroups
-                });
+                const builtRow = buildVisitsReportRowFromEntries(driverName, driverCode, sectorName, entries, rangeMeters);
+                // ===== [جديد] نحتفظ بقائمة الزيارات الخام لهذا المندوب (بمعزل عن أي نطاق) لإعادة استخدامها لاحقاً
+                // عند تصدير الملف المستقل بزر "نطاق احتساب الزيارة الحقيقية" الخاص به =====
+                lastVisitsReportRawEntriesByDriver.push({ driverName, driverCode, sectorName, entries });
+                rows.push(builtRow);
             });
 
             rows.sort((a, b) => (b.realCount + b.fakeCount) - (a.realCount + a.fakeCount) || (a.driverName || '').localeCompare(b.driverName || '', 'ar'));
@@ -28728,12 +30096,14 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <th style="padding:8px;text-align:right;">🏢 اسم القطاع</th>
                             <th style="padding:8px;text-align:center;">🔁 العملاء الذين تمت زيارتهم أكثر من مرة</th>
                             <th style="padding:8px;text-align:center;">✅ عدد الزيارات الحقيقية</th>
+                            <th style="padding:8px;text-align:center;">💰 زيارات إيجابية</th>
+                            <th style="padding:8px;text-align:center;">🚫 زيارات سلبية</th>
                             <th style="padding:8px;text-align:center;">❌ عدد الزيارات الوهمية</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${rows.map((r, i) => {
-                            let realCell, fakeCell, repeatCell;
+                            let realCell, fakeCell, repeatCell, positiveCell, negativeCell;
                             if (useButtons) {
                                 // ===== [جديد] خلية "العملاء الذين تمت زيارتهم أكثر من مرة": العدد + زر عرض التفاصيل =====
                                 const repeatIdx = visitsDetailLookup.length;
@@ -28748,6 +30118,19 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                                     <div style="font-weight:700;color:#198754;">${r.realCount}</div>
                                     ${r.realCount > 0 ? `<button type="button" onclick="showVisitsDetailPopup(${realIdx})" style="margin-top:4px;background:#198754;color:#fff;border:none;padding:3px 10px;border-radius:10px;cursor:pointer;font-size:11px;">👁 عرض (${r.realCount})</button>` : ''}
                                 `;
+                                // ===== [جديد] خليتا "زيارات إيجابية/سلبية" - نفس أسلوب خلية "الزيارات الحقيقية" بالضبط، لكن كتصنيف فرعي منها =====
+                                const positiveIdx = visitsDetailLookup.length;
+                                visitsDetailLookup.push({ driverName: r.driverName, kind: 'positive', rows: r.positiveRows || [] });
+                                positiveCell = `
+                                    <div style="font-weight:700;color:#0d6efd;">${r.positiveCount || 0}</div>
+                                    ${(r.positiveCount || 0) > 0 ? `<button type="button" onclick="showVisitsDetailPopup(${positiveIdx})" style="margin-top:4px;background:#0d6efd;color:#fff;border:none;padding:3px 10px;border-radius:10px;cursor:pointer;font-size:11px;">👁 عرض (${r.positiveCount})</button>` : ''}
+                                `;
+                                const negativeIdx = visitsDetailLookup.length;
+                                visitsDetailLookup.push({ driverName: r.driverName, kind: 'negative', rows: r.negativeRows || [] });
+                                negativeCell = `
+                                    <div style="font-weight:700;color:#fd7e14;">${r.negativeCount || 0}</div>
+                                    ${(r.negativeCount || 0) > 0 ? `<button type="button" onclick="showVisitsDetailPopup(${negativeIdx})" style="margin-top:4px;background:#fd7e14;color:#fff;border:none;padding:3px 10px;border-radius:10px;cursor:pointer;font-size:11px;">👁 عرض (${r.negativeCount})</button>` : ''}
+                                `;
                                 const fakeIdx = visitsDetailLookup.length;
                                 visitsDetailLookup.push({ driverName: r.driverName, kind: 'fake', rows: r.fakeRows || [] });
                                 fakeCell = `
@@ -28757,6 +30140,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             } else {
                                 repeatCell = `<div style="font-weight:700;color:#6f42c1;">${r.repeatClientsCount || 0}</div>`;
                                 realCell = `<div style="font-weight:700;color:#198754;">${r.realCount}</div>${formatVisitsRowsHtml(r.realRows, esc)}`;
+                                positiveCell = `<div style="font-weight:700;color:#0d6efd;">${r.positiveCount || 0}</div>${formatVisitsRowsHtml(r.positiveRows, esc)}`;
+                                negativeCell = `<div style="font-weight:700;color:#fd7e14;">${r.negativeCount || 0}</div>${formatVisitsRowsHtml(r.negativeRows, esc)}`;
                                 fakeCell = `<div style="font-weight:700;color:#dc3545;">${r.fakeCount}</div>${formatVisitsRowsHtml(r.fakeRows, esc)}`;
                             }
                             return `
@@ -28767,6 +30152,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <td style="padding:7px;">${esc(r.sectorName)}</td>
                             <td style="padding:7px;text-align:center;">${repeatCell}</td>
                             <td style="padding:7px;text-align:center;">${realCell}</td>
+                            <td style="padding:7px;text-align:center;">${positiveCell}</td>
+                            <td style="padding:7px;text-align:center;">${negativeCell}</td>
                             <td style="padding:7px;text-align:center;">${fakeCell}</td>
                         </tr>`;
                         }).join('')}
@@ -28797,8 +30184,10 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             if (summary) {
                 const totalReal = rows.reduce((s, r) => s + r.realCount, 0);
                 const totalFake = rows.reduce((s, r) => s + r.fakeCount, 0);
+                const totalPositive = rows.reduce((s, r) => s + (r.positiveCount || 0), 0);
+                const totalNegative = rows.reduce((s, r) => s + (r.negativeCount || 0), 0);
                 summary.innerHTML = rows.length > 0
-                    ? `<p>👥 عدد المناديب: <b>${rows.length}</b> &nbsp;|&nbsp; 🧭 إجمالي الزيارات: <b>${totalReal + totalFake}</b> &nbsp;|&nbsp; ✅ حقيقية: <b style="color:#198754;">${totalReal}</b> &nbsp;|&nbsp; ❌ وهمية: <b style="color:#dc3545;">${totalFake}</b></p>`
+                    ? `<p>👥 عدد المناديب: <b>${rows.length}</b> &nbsp;|&nbsp; 🧭 إجمالي الزيارات: <b>${totalReal + totalFake}</b> &nbsp;|&nbsp; ✅ حقيقية: <b style="color:#198754;">${totalReal}</b> &nbsp;|&nbsp; 💰 إيجابية: <b style="color:#0d6efd;">${totalPositive}</b> &nbsp;|&nbsp; 🚫 سلبية: <b style="color:#fd7e14;">${totalNegative}</b> &nbsp;|&nbsp; ❌ وهمية: <b style="color:#dc3545;">${totalFake}</b></p>`
                     : '';
             }
             const wrap = document.getElementById('visitsReportTableWrap');
@@ -28854,12 +30243,16 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         }
         // ===== [جديد] يبني جدول الزيارات الفردية (تاريخها/أصنافها/كميتها/قيمتها/المسافة عن موقع العميل) لعميل
         // واحد بعينه - يُستخدم داخل النافذة الفرعية (المستوى الثاني) التي يفتحها زر "عرض" الخاص بكل عميل =====
-        function renderVisitsRowsDetailTable(rows, isFake, esc) {
+        function renderVisitsRowsDetailTable(rows, isFakeOrColor, esc) {
+            // ===== [تعديل] يقبل إما لون جاهز (نص Hex بدءاً بـ#) أو القيمة القديمة true/false (حقيقية/وهمية) حتى
+            // يبقى متوافقاً مع أي استدعاء قديم لم يُحدَّث =====
+            const color = (typeof isFakeOrColor === 'string' && isFakeOrColor.indexOf('#') === 0) ? isFakeOrColor : (isFakeOrColor ? '#dc3545' : '#198754');
             const sortedRows = (rows || []).slice().sort((a, b) => {
                 const ta = a.date ? new Date(a.date).getTime() : 0;
                 const tb = b.date ? new Date(b.date).getTime() : 0;
                 return tb - ta;
             });
+            currentStopMatchRowsList = sortedRows; // ===== [جديد] يغذي زر "عرض" الخاص بعمود "تطابق وقفة السيارة" =====
             const rowsHtml = sortedRows.map((r, i) => {
                 const dateText = r.date ? new Date(r.date).toLocaleString('ar-EG') : '—';
                 const distText = (typeof r.distance === 'number') ? (r.distance.toLocaleString('ar-EG') + ' م') : '—';
@@ -28870,40 +30263,108 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         <td style="padding:6px;">${i + 1}</td>
                         <td style="padding:6px;font-size:11px;max-width:220px;">${esc(itemsText)}</td>
                         <td style="padding:6px;text-align:center;">${esc(r.qty)}</td>
-                        <td style="padding:6px;font-weight:700;color:${isFake ? '#dc3545' : '#198754'};">${valText}</td>
+                        <td style="padding:6px;font-weight:700;color:${color};">${valText}</td>
                         <td style="padding:6px;font-size:12px;">${esc(dateText)}</td>
                         <td style="padding:6px;text-align:center;">${esc(distText)}</td>
+                        <td style="padding:6px;text-align:center;">${stopMatchCellHtml(r.stopMatch, i)}</td>
                     </tr>
                 `;
             }).join('');
             return sortedRows.length ? `
+                <div style="overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
                     <thead>
-                        <tr style="background:${isFake ? '#dc3545' : '#198754'};color:#fff;">
+                        <tr style="background:${color};color:#fff;">
                             <th style="padding:6px;">#</th>
                             <th style="padding:6px;">أصناف الزيارة</th>
                             <th style="padding:6px;">الكمية</th>
                             <th style="padding:6px;">القيمة</th>
                             <th style="padding:6px;">تاريخ الزيارة</th>
                             <th style="padding:6px;">المسافة عن موقع العميل</th>
+                            <th style="padding:6px;">🅿️ تطابق وقفة السيارة</th>
                         </tr>
                     </thead>
                     <tbody>${rowsHtml}</tbody>
                 </table>
+                </div>
             ` : `<div style="padding:16px;text-align:center;color:#6c757d;">🚫 لا توجد زيارات</div>`;
         }
+        // ===== [جديد] خلية عمود "تطابق وقفة السيارة": شارة ملوّنة بالحالة الثلاثية + زر "عرض" يفتح نافذة صغيرة
+        // بنص توضيحي مفصَّل (وقت/مدة الوقفة الفعلية، أو مسافة أقرب نقطة مسار، أو سبب عدم توفر بيانات) =====
+        function stopMatchCellHtml(sm, rowIdx) {
+            if (!sm) return '—';
+            const colors = { stop: '#198754', passed: '#fd7e14', none: '#dc3545' };
+            const color = colors[sm.status] || '#6c757d';
+            return `
+                <div style="font-weight:700;color:${color};font-size:11px;white-space:nowrap;">${sm.label}</div>
+                <button type="button" onclick="showStopMatchDetailPopup(${rowIdx})" style="margin-top:4px;background:${color};color:#fff;border:none;padding:2px 9px;border-radius:10px;cursor:pointer;font-size:10.5px;">👁 عرض</button>
+            `;
+        }
+        // ===== [جديد] نافذة صغيرة (أعلى من كل المستويات) تعرض النص التوضيحي الكامل لنتيجة "تطابق وقفة السيارة"
+        // الخاصة بزيارة واحدة بعينها - تُفتح من الصف رقم rowIdx داخل currentStopMatchRowsList (آخر جدول تفاصيل
+        // زيارات فردية تم رسمه فعلياً، سواء من نافذة تفاصيل الزيارات العادية أو نافذة العملاء المتكررين) =====
+        function ensureStopMatchInfoModal() {
+            let overlay = document.getElementById('stopMatchInfoModalOverlay');
+            if (overlay) return overlay;
+            overlay = document.createElement('div');
+            overlay.id = 'stopMatchInfoModalOverlay';
+            overlay.className = 'scv-modal-overlay';
+            overlay.style.zIndex = '10070';
+            overlay.onclick = function (e) { if (e.target === overlay) closeStopMatchInfoModal(); };
+            overlay.innerHTML = `
+                <div class="scv-modal" style="max-width:480px;">
+                    <div class="scv-modal-head" style="background:#20242c;">
+                        <h3>🅿️ تطابق وقفة السيارة</h3>
+                        <button type="button" class="scv-modal-close" onclick="closeStopMatchInfoModal()">✕</button>
+                    </div>
+                    <div class="scv-modal-body" id="smiModalBody"></div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            return overlay;
+        }
+        function showStopMatchDetailPopup(rowIdx) {
+            const row = currentStopMatchRowsList[rowIdx];
+            const sm = row && row.stopMatch;
+            if (!sm) return;
+            const overlay = ensureStopMatchInfoModal();
+            const colors = { stop: '#198754', passed: '#fd7e14', none: '#dc3545' };
+            const color = colors[sm.status] || '#6c757d';
+            const bodyEl = document.getElementById('smiModalBody');
+            if (bodyEl) {
+                bodyEl.innerHTML = `
+                    <div style="padding:10px 14px;border-radius:10px;margin-bottom:10px;font-weight:700;text-align:center;color:#fff;background:${color};">${sm.label}</div>
+                    <div style="font-size:13px;line-height:1.9;color:#495057;">${sm.detail || ''}</div>
+                `;
+            }
+            overlay.classList.add('open');
+        }
+        function closeStopMatchInfoModal() {
+            const overlay = document.getElementById('stopMatchInfoModalOverlay');
+            if (overlay) overlay.classList.remove('open');
+        }
+        // ===== [جديد] بيانات كل "نوع" زيارة معروض بنافذة التفاصيل (حقيقية/وهمية/إيجابية/سلبية): العنوان + اللون
+        // المستخدم في الجدول والترويسة - بدل الاكتفاء بحقيقية/وهمية فقط (isFake) =====
+        const VISITS_DETAIL_KIND_META = {
+            real: { title: '✅ تفاصيل الزيارات الحقيقية', color: '#198754' },
+            fake: { title: '❌ تفاصيل الزيارات الوهمية', color: '#dc3545' },
+            positive: { title: '💰 تفاصيل الزيارات الإيجابية (لها قيمة)', color: '#0d6efd' },
+            negative: { title: '🚫 تفاصيل الزيارات السلبية (بقيمة صفر)', color: '#fd7e14' }
+        };
         function showVisitsDetailPopup(lookupIdx) {
             const entry = visitsDetailLookup[lookupIdx];
             if (!entry) return;
             const overlay = ensureVisitsDetailModal();
             const esc = (str) => String(str == null ? '' : str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-            const isFake = entry.kind === 'fake';
+            const meta = VISITS_DETAIL_KIND_META[entry.kind] || VISITS_DETAIL_KIND_META.real;
+            const isFake = entry.kind === 'fake'; // ===== يبقى للتوافق مع أي استخدام آخر يعتمد على هذا الاسم تحديداً =====
             const headEl = document.getElementById('vdModalTitle');
-            if (headEl) headEl.textContent = `${isFake ? '❌ تفاصيل الزيارات الوهمية' : '✅ تفاصيل الزيارات الحقيقية'} - ${entry.driverName}`;
+            if (headEl) headEl.textContent = `${meta.title} - ${entry.driverName}`;
             // ===== [تعديل مطلوب] دمج كل زيارات نفس العميل في صف واحد (بدل صف منفصل لكل زيارة/كود اوردر)، مع
             // زر "عرض" أمام كل عميل يفتح نافذة فرعية بتفاصيل وتواريخ زياراته الفردية وأصنافها =====
             currentVisitsClientGroups = groupVisitRowsByClient(entry.rows).sort((a, b) => b.count - a.count || (a.clientName || '').localeCompare(b.clientName || '', 'ar'));
             currentVisitsDetailIsFake = isFake;
+            currentVisitsDetailColor = meta.color;
             currentVisitsDetailDriverName = entry.driverName;
             const rowsHtml = currentVisitsClientGroups.map((g, i) => {
                 const valText = g.totalValue.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ج.م';
@@ -28914,7 +30375,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         <td style="padding:6px;font-size:11px;">${esc(g.clientCode)}</td>
                         <td style="padding:6px;text-align:center;font-weight:700;">${g.count}</td>
                         <td style="padding:6px;text-align:center;">${g.totalQty}</td>
-                        <td style="padding:6px;font-weight:700;color:${isFake ? '#dc3545' : '#198754'};">${valText}</td>
+                        <td style="padding:6px;font-weight:700;color:${meta.color};">${valText}</td>
                         <td style="padding:6px;text-align:center;"><button type="button" onclick="showVisitsClientDetailPopup(${i})" style="background:#6f42c1;color:#fff;border:none;padding:3px 10px;border-radius:10px;cursor:pointer;font-size:11px;">👁 عرض</button></td>
                     </tr>
                 `;
@@ -28924,7 +30385,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 bodyEl.innerHTML = currentVisitsClientGroups.length ? `
                     <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
                         <thead>
-                            <tr style="background:${isFake ? '#dc3545' : '#198754'};color:#fff;">
+                            <tr style="background:${meta.color};color:#fff;">
                                 <th style="padding:6px;">#</th>
                                 <th style="padding:6px;">اسم العميل</th>
                                 <th style="padding:6px;">كود العميل</th>
@@ -28976,12 +30437,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const headEl = document.getElementById('vcdModalTitle');
             if (headEl) headEl.textContent = `${currentVisitsDetailIsFake ? '❌' : '✅'} زيارات ${group.clientName} - ${currentVisitsDetailDriverName}`;
             const bodyEl = document.getElementById('vcdModalBody');
-            if (bodyEl) bodyEl.innerHTML = renderVisitsRowsDetailTable(group.rows, currentVisitsDetailIsFake, esc);
+            if (bodyEl) bodyEl.innerHTML = renderVisitsRowsDetailTable(group.rows, currentVisitsDetailColor, esc);
             overlay.classList.add('open');
         }
         function closeVisitsClientDetailModal() {
             const overlay = document.getElementById('visitsClientDetailModalOverlay');
             if (overlay) overlay.classList.remove('open');
+            closeStopMatchInfoModal();
         }
 
         // ===== [جديد] "العملاء الذين تمت زيارتهم أكثر من مرة": يجمّع زيارات مندوب واحد (حقيقية + وهمية) حسب العميل
@@ -29021,6 +30483,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 return tb - ta;
             });
             if (!sortedRows.length) return `<div style="padding:16px;text-align:center;color:#6c757d;">🚫 لا توجد زيارات</div>`;
+            currentStopMatchRowsList = sortedRows; // ===== [جديد] يغذي زر "عرض" الخاص بعمود "تطابق وقفة السيارة" =====
             const rowsHtml = sortedRows.map((r, i) => {
                 const dateText = r.date ? new Date(r.date).toLocaleString('ar-EG') : '—';
                 const distText = (typeof r.distance === 'number') ? (r.distance.toLocaleString('ar-EG') + ' م') : '—';
@@ -29038,6 +30501,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         <td style="padding:6px;font-size:12px;">${esc(dateText)}</td>
                         <td style="padding:6px;text-align:center;">${statusHtml}</td>
                         <td style="padding:6px;text-align:center;">${esc(distText)}</td>
+                        <td style="padding:6px;text-align:center;">${stopMatchCellHtml(r.stopMatch, i)}</td>
                     </tr>
                 `;
             }).join('');
@@ -29053,6 +30517,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             <th style="padding:6px;">تاريخ الزيارة</th>
                             <th style="padding:6px;">الحالة</th>
                             <th style="padding:6px;">المسافة عن موقع العميل</th>
+                            <th style="padding:6px;">🅿️ تطابق وقفة السيارة</th>
                         </tr>
                     </thead>
                     <tbody>${rowsHtml}</tbody>
@@ -29185,7 +30650,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
 
         // ===== يبني CSS + JS اللازمين لعمل أزرار "عرض" المنبثقة (تفاصيل الزيارات الحقيقية/الوهمية) بذاتها
         // داخل ملف HTML المُصدَّر المستقل - بنفس أسلوب getEliteClientsInteractiveAssetsHtml بالضبط =====
-        function getVisitsReportInteractiveAssetsHtml(detailLookupData) {
+        function getVisitsReportInteractiveAssetsHtml(detailLookupData, rawEntriesData, initialRangeMeters) {
             return `
                 <style>
                     .scv-modal-overlay {
@@ -29216,20 +30681,63 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     let visitsDetailLookup = ${JSON.stringify(detailLookupData)};
                     let currentVisitsClientGroups = [];
                     let currentVisitsDetailIsFake = false;
+                    let currentVisitsDetailColor = '#198754';
                     let currentVisitsDetailDriverName = '';
                     let currentVisitsRepeatGroups = [];
                     let currentVisitsRepeatDriverName = '';
+                    let currentStopMatchRowsList = [];
+                    const VISITS_DETAIL_KIND_META = ${JSON.stringify(VISITS_DETAIL_KIND_META)};
                     ${groupVisitRowsByClient.toString()}
                     ${renderVisitsRepeatRowsTable.toString()}
                     ${showVisitsRepeatPopup.toString()}
                     ${showVisitsRepeatClientDetailPopup.toString()}
                     ${renderVisitsRowsDetailTable.toString()}
+                    ${stopMatchCellHtml.toString()}
+                    ${ensureStopMatchInfoModal.toString()}
+                    ${showStopMatchDetailPopup.toString()}
+                    ${closeStopMatchInfoModal.toString()}
                     ${ensureVisitsDetailModal.toString()}
                     ${showVisitsDetailPopup.toString()}
                     ${closeVisitsDetailModal.toString()}
                     ${ensureVisitsClientDetailModal.toString()}
                     ${showVisitsClientDetailPopup.toString()}
                     ${closeVisitsClientDetailModal.toString()}
+                    // ===== [جديد] زر "📏 نطاق احتساب الزيارة الحقيقية (متر)" داخل الملف المُصدَّر: يعيد تصنيف كل
+                    // الزيارات فوراً بأي نطاق يُدخله المستخدم، اعتماداً فقط على "الزيارات الخام" المضمَّنة هنا
+                    // (مسافتها + قياسات تطابق الوقفة الخام لموقع الزيارة ولموقع العميل الحقيقي معاً) - دون أي
+                    // اتصال بالبرنامج الأصلي أو بمسار GPS الخام =====
+                    let expVisitsRawEntriesByDriver = ${JSON.stringify(rawEntriesData || [])};
+                    let expVisitsCurrentRows = [];
+                    ${groupRepeatVisitsByClient.toString()}
+                    ${computeVisitStopMatchInfo.toString()}
+                    ${pickStopMatchForVisitEntry.toString()}
+                    ${buildVisitsReportRowFromEntries.toString()}
+                    ${buildVisitsReportTableHtml.toString()}
+                    ${initTableAutoFilter.toString()}
+                    function expReapplyVisitsReportRange() {
+                        const input = document.getElementById('expVisitsRangeInput');
+                        const val = input ? parseFloat(input.value) : NaN;
+                        if (isNaN(val) || val < 0) {
+                            if (typeof showToast === 'function') showToast('⚠️ يرجى إدخال قيمة صحيحة للنطاق (متر)', 'error');
+                            else alert('⚠️ يرجى إدخال قيمة صحيحة للنطاق (متر)');
+                            return;
+                        }
+                        const rows = expVisitsRawEntriesByDriver
+                            .map(function (d) { return buildVisitsReportRowFromEntries(d.driverName, d.driverCode, d.sectorName, d.entries, val); })
+                            .sort(function (a, b) { return (b.realCount + b.fakeCount) - (a.realCount + a.fakeCount) || (a.driverName || '').localeCompare(b.driverName || '', 'ar'); });
+                        expVisitsCurrentRows = rows;
+                        const totalReal = rows.reduce(function (s, r) { return s + r.realCount; }, 0);
+                        const totalFake = rows.reduce(function (s, r) { return s + r.fakeCount; }, 0);
+                        const summaryEl = document.getElementById('visitsReportExportSummary');
+                        if (summaryEl) {
+                            summaryEl.innerHTML = '👥 عدد المناديب: <b>' + rows.length + '</b> &nbsp;|&nbsp; 🧭 إجمالي الزيارات: <b>' + (totalReal + totalFake) + '</b> &nbsp;|&nbsp; ✅ حقيقية: <b>' + totalReal + '</b> &nbsp;|&nbsp; ❌ وهمية: <b>' + totalFake + '</b>';
+                        }
+                        const wrap = document.getElementById('visitsReportExportTableWrap');
+                        if (wrap) {
+                            wrap.innerHTML = buildVisitsReportTableHtml(rows, 'export');
+                            if (rows.length > 0) initTableAutoFilter('visitsReportTable');
+                        }
+                    }
                 <\/script>
             `;
         }
@@ -29339,9 +30847,14 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     let sectorVisitsDetailLookup = [];
                     let currentSectorVisitsClientGroups = [];
                     let currentSectorVisitsDriverName = '';
+                    let currentStopMatchRowsList = [];
                     ${buildSectorVisitsReportTableHtml.toString()}
                     ${initTableAutoFilter.toString()}
                     ${renderVisitsRowsDetailTable.toString()}
+                    ${stopMatchCellHtml.toString()}
+                    ${ensureStopMatchInfoModal.toString()}
+                    ${showStopMatchDetailPopup.toString()}
+                    ${closeStopMatchInfoModal.toString()}
                     ${ensureVisitsDetailModal.toString()}
                     ${showSectorVisitsRepPopup.toString()}
                     ${closeVisitsDetailModal.toString()}
@@ -29385,6 +30898,11 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const totalFake = lastVisitsReportRows.reduce((s, r) => s + r.fakeCount, 0);
             const tableHtml = buildVisitsReportTableHtml(lastVisitsReportRows, 'export');
             const detailLookupSnapshot = visitsDetailLookup.slice();
+            // ===== [جديد] لقطة من "الزيارات الخام" (بمسافتها وقياسات تطابق الوقفة الخام لكل مندوب) تُضمَّن داخل
+            // الملف المُصدَّر نفسه، ليتمكن زر "📏 نطاق احتساب الزيارة الحقيقية (متر)" من إعادة تصنيف كل الزيارات
+            // فوراً بأي نطاق يختاره المستخدم لاحقاً، دون أي اتصال بالبرنامج الأصلي أو بمسار GPS الخام =====
+            const rawEntriesSnapshot = lastVisitsReportRawEntriesByDriver.slice();
+            const currentRangeMeters = visitsReportMatchRangeMeters;
             const embeddedSectorSectionHtml = buildEmbeddedSectorVisitsReportSectionHtml();
             const htmlContent = `
                 <div class="pdf-header pdf-logo-header">
@@ -29396,10 +30914,17 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         <div class="sub">📅 تاريخ التقرير: ${new Date().toLocaleString('ar-EG')}</div>
                     </div>
                 </div>
-                <div class="pdf-vehicle-info">
+                <div class="visits-export-range-bar" style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:10px 0;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#495057;">
+                        📏 نطاق احتساب الزيارة الحقيقية (متر)
+                        <input type="number" id="expVisitsRangeInput" min="0" step="1" value="${currentRangeMeters}" style="width:90px;padding:6px;border-radius:8px;border:1px solid #ccc;">
+                    </label>
+                    <button type="button" onclick="expReapplyVisitsReportRange()" style="background:#20c997;color:#fff;border:none;padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;">🔄 تطبيق النطاق وإعادة التصنيف</button>
+                </div>
+                <div class="pdf-vehicle-info" id="visitsReportExportSummary">
                     👥 عدد المناديب: <b>${lastVisitsReportRows.length}</b> &nbsp;|&nbsp; 🧭 إجمالي الزيارات: <b>${totalReal + totalFake}</b> &nbsp;|&nbsp; ✅ حقيقية: <b>${totalReal}</b> &nbsp;|&nbsp; ❌ وهمية: <b>${totalFake}</b>
                 </div>
-                <div class="pdf-table-container">
+                <div class="pdf-table-container" id="visitsReportExportTableWrap">
                     ${tableHtml}
                 </div>
                 <div class="pdf-footer">
@@ -29407,8 +30932,9 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <br>
                     <span style="font-size:8px;">${new Date().toLocaleString('ar-EG')}</span>
                 </div>
+                <style>@media print { .visits-export-range-bar { display: none !important; } }</style>
                 ${getVisitsReportFilterAssetsHtml()}
-                ${getVisitsReportInteractiveAssetsHtml(detailLookupSnapshot)}
+                ${getVisitsReportInteractiveAssetsHtml(detailLookupSnapshot, rawEntriesSnapshot, currentRangeMeters)}
             `;
             downloadStandaloneHTMLReport(htmlContent, '🧭 تقرير الزيارات', 'تقرير_الزيارات', embeddedSectorSectionHtml);
         }
@@ -29420,17 +30946,17 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 showToast('⚠️ لا توجد بيانات زيارات لتصديرها', 'error');
                 return;
             }
-            const headers = ['#', 'اسم المندوب', 'كود المندوب', 'اسم القطاع', 'العملاء الذين تمت زيارتهم أكثر من مرة', 'عدد الزيارات الحقيقية', 'عدد الزيارات الوهمية', 'إجمالي الزيارات'];
+            const headers = ['#', 'اسم المندوب', 'كود المندوب', 'اسم القطاع', 'العملاء الذين تمت زيارتهم أكثر من مرة', 'عدد الزيارات الحقيقية', 'زيارات إيجابية', 'زيارات سلبية', 'عدد الزيارات الوهمية', 'إجمالي الزيارات'];
             const aoa = [headers];
             lastVisitsReportRows.forEach((r, i) => {
-                aoa.push([i + 1, r.driverName, r.driverCode || '—', r.sectorName, r.repeatClientsCount || 0, r.realCount, r.fakeCount, r.realCount + r.fakeCount]);
+                aoa.push([i + 1, r.driverName, r.driverCode || '—', r.sectorName, r.repeatClientsCount || 0, r.realCount, r.positiveCount || 0, r.negativeCount || 0, r.fakeCount, r.realCount + r.fakeCount]);
             });
             const ws = XLSX.utils.aoa_to_sheet(aoa);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'تقرير الزيارات');
 
             // ===== [جديد] شيت ثانٍ بتفاصيل زيارات "العملاء الذين تمت زيارتهم أكثر من مرة" (صف لكل زيارة) =====
-            const repeatAoa = [['اسم المندوب', 'كود المندوب', 'اسم القطاع', 'اسم العميل', 'كود العميل', 'عدد زيارات العميل', 'تاريخ الزيارة', 'أصناف الزيارة', 'الكمية', 'القيمة', 'حالة الزيارة', 'المسافة عن موقع العميل (م)']];
+            const repeatAoa = [['اسم المندوب', 'كود المندوب', 'اسم القطاع', 'اسم العميل', 'كود العميل', 'عدد زيارات العميل', 'تاريخ الزيارة', 'أصناف الزيارة', 'الكمية', 'القيمة', 'حالة الزيارة', 'المسافة عن موقع العميل (م)', 'تطابق وقفة السيارة']];
             lastVisitsReportRows.forEach(r => {
                 (r.repeatClientGroups || []).forEach(g => {
                     g.rows.slice().sort((a, b) => (a.date ? new Date(a.date).getTime() : 0) - (b.date ? new Date(b.date).getTime() : 0)).forEach(v => {
@@ -29440,7 +30966,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                             (v.items && v.items.length) ? v.items.join('، ') : '—',
                             v.qty, v.value,
                             v.isReal ? 'حقيقية' : 'وهمية',
-                            (typeof v.distance === 'number') ? v.distance : '—'
+                            (typeof v.distance === 'number') ? v.distance : '—',
+                            v.stopMatch ? v.stopMatch.label : '—'
                         ]);
                     });
                 });
@@ -29690,7 +31217,12 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     let sectorVisitsDetailLookup = ${JSON.stringify(detailLookupData)};
                     let currentSectorVisitsClientGroups = [];
                     let currentSectorVisitsDriverName = '';
+                    let currentStopMatchRowsList = [];
                     ${renderVisitsRowsDetailTable.toString()}
+                    ${stopMatchCellHtml.toString()}
+                    ${ensureStopMatchInfoModal.toString()}
+                    ${showStopMatchDetailPopup.toString()}
+                    ${closeStopMatchInfoModal.toString()}
                     ${ensureVisitsDetailModal.toString()}
                     ${showSectorVisitsRepPopup.toString()}
                     ${closeVisitsDetailModal.toString()}
