@@ -1,962 +1,5 @@
 <!DOCTYPE html>
 <html dir="rtl" lang="ar"><head>
-    <!-- ===== بوابة تسجيل الدخول والتحقق من الصلاحية عبر Firebase: هذا السكريبت يعمل أولاً (قبل أي شيء آخر في
-         الصفحة) - يخفي محتوى الصفحة بالكامل لحد ما يتأكد المستخدم عامل تسجيل دخول (Firebase Auth) وأن حسابه
-         مسجَّل في قاعدة بيانات Firestore تحت users/{uid} وقيمة allowed = true، وإلا يمنع عرض المحتوى نهائياً
-         ويعرض بدلاً منه فورم دخول أو رسالة "ليس لديك صلاحية". لازم تستبدل قيم firebaseConfig تحت دي ببيانات
-         مشروعك الحقيقي على Firebase قبل ما تستخدم النسخة ===== -->
-    <script type="module">
-      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-      import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
-      import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, getDocs, query, orderBy, limit, increment, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
-      // ←←← حط بيانات مشروعك هنا
-      const firebaseConfig = {
-        apiKey: "AIzaSyAw_jhByWs2zbpA-v32yckGj_AGQ0Z5_ws",
-        authDomain: "ahmed-turky-system.firebaseapp.com",
-        projectId: "ahmed-turky-system",
-        storageBucket: "ahmed-turky-system.firebasestorage.app",
-        messagingSenderId: "683720810611",
-        appId: "1:683720810611:web:09581d17c9639bde684a06",
-        measurementId: "G-D1FCVS7HNQ"
-      };
-      const app = initializeApp(firebaseConfig);
-      const auth = getAuth(app);
-      const db = getFirestore(app);
-      // ===== إعدادات "متصل الآن": المستخدم يُعتبر متصلاً لو وصلت نبضة (heartbeat) منه خلال آخر دقيقتين،
-      // والنبضة نفسها بترسل كل 45 ثانية طول ما الصفحة مفتوحة عنده وهو مسجل دخول =====
-      const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
-      const HEARTBEAT_INTERVAL_MS = 45 * 1000;
-      // ===== ملاحظة مهمة: مكتبات زي الخرائط (Leaflet) بتحسب أبعادها وقت أول ظهور ليها في الصفحة. لو
-      // خبّينا محتوى الصفحة بـ display:none وقت التحميل، المكتبات دي بتتهيأ بحجم صفر وبتفضل مكسورة حتى
-      // لو رجّعنا نظهر المحتوى تاني بعدين. عشان كده الحل هنا مختلف: بنسيب محتوى الصفحة الأصلي ظاهر
-      // وبيتحمّل طبيعي جداً (بكل أبعاده الصحيحة)، وبس بنحط طبقة (overlay) لونها صريح (solid) فوقه تماماً
-      // تغطّي الشاشة كلها لحد ما نتأكد من صلاحية اليوزر. اليوزر مش هيشوف أي حاجة تحت الـ overlay، لكن
-      // المحتوى الأصلي بيكون بيتحمّل ويتهيأ بشكل صحيح في الخلفية طول الوقت =====
-      function getOverlay() {
-        let overlay = document.getElementById("__auth_overlay__");
-        if (!overlay) {
-          overlay = document.createElement("div");
-          overlay.id = "__auth_overlay__";
-          overlay.style.cssText = "position:fixed;inset:0;background:#fff;z-index:999999;overflow:auto;";
-          document.body.appendChild(overlay);
-        }
-        return overlay;
-      }
-      function removeOverlay() {
-        const overlay = document.getElementById("__auth_overlay__");
-        if (overlay) overlay.remove();
-      }
-      // ===== وضع "قراءة فقط" مُصدَّر: لو الصفحة دي ملف HTML مُحمَّل (فيه __EMBEDDED_SHARE_DATA__ مُضمَّن
-      // مسبقاً) أو رابط مشاركة ذاتي الاكتفاء (#d=...)، فالبيانات already موجودة جوه الصفحة/الرابط نفسه ولا
-      // معنى إطلاقاً لتسجيل دخول Firebase هنا؛ الشخص المُستلم للملف/الرابط مفروض يشوف النتائج فوراً بدون أي
-      // بوابة دخول. عشان كده نتجاهل كل بوابة تسجيل الدخول دي تماماً في الحالة دي (مفيش overlay ولا فورم دخول) =====
-      const __isSharedReadOnlyFile = (typeof window.__EMBEDDED_SHARE_DATA__ !== 'undefined' && !!window.__EMBEDDED_SHARE_DATA__)
-        || (window.location.hash && window.location.hash.startsWith('#d='));
-
-      if (!__isSharedReadOnlyFile) {
-        // إظهار الـ overlay فوراً عشان مايبانش أي حاجة من المحتوى الأصلي قبل التحقق من تسجيل الدخول
-        getOverlay();
-      }
-
-      // ===== توليد معرف ثابت للجهاز (Device ID): بيتخزن في localStorage (مش متأثر بإجبار تسجيل الخروج
-      // اللي بيحصل تحت)، فيفضل نفس المعرف لنفس الجهاز حتى لو المستخدم قفل المتصفح وفتحه تاني. ده بيسمحلنا
-      // نحسب "كام جهاز مختلف" بيستخدم كل حساب =====
-      function getDeviceId() {
-        let id = localStorage.getItem("__device_id__");
-        if (!id) {
-          const raw = navigator.userAgent + "|" + navigator.platform + "|" + screen.width + "x" + screen.height + "|" + Math.random();
-          let hash = 0;
-          for (let i = 0; i < raw.length; i++) { hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0; }
-          id = "dev_" + Math.abs(hash).toString(36) + "_" + Date.now().toString(36);
-          localStorage.setItem("__device_id__", id);
-        }
-        return id;
-      }
-
-      // ===== تسجيل عملية الدخول: بيتسجل سجل عام في login_logs (لكل الأحداث) + بيتحدّث مستند الجهاز
-      // تحت users/{uid}/devices/{deviceId} (لحساب عدد الأجهزة وآخر ظهور لكل جهاز) =====
-      async function logLoginEvent(user, deviceId) {
-        let ip = null;
-        try {
-          const res = await fetch("https://api.ipify.org?format=json");
-          const data = await res.json();
-          ip = data.ip || null;
-        } catch (e) { /* تجاهل: مش مشكلة لو فشل جلب الـ IP */ }
-
-        try {
-          await addDoc(collection(db, "login_logs"), {
-            uid: user.uid,
-            email: user.email,
-            deviceId,
-            userAgent: navigator.userAgent,
-            platform: navigator.platform,
-            screen: screen.width + "x" + screen.height,
-            ip,
-            timestamp: serverTimestamp()
-          });
-        } catch (e) { console.error("logLoginEvent error:", e); }
-
-        try {
-          const deviceRef = doc(db, "users", user.uid, "devices", deviceId);
-          const deviceSnap = await getDoc(deviceRef);
-          if (deviceSnap.exists()) {
-            await updateDoc(deviceRef, { lastSeen: serverTimestamp(), loginCount: increment(1) });
-          } else {
-            await setDoc(deviceRef, {
-              deviceId,
-              userAgent: navigator.userAgent,
-              platform: navigator.platform,
-              screen: screen.width + "x" + screen.height,
-              firstSeen: serverTimestamp(),
-              lastSeen: serverTimestamp(),
-              loginCount: 1
-            });
-          }
-        } catch (e) { console.error("device log error:", e); }
-      }
-
-      // ===== تسجيل محاولة دخول فاشلة: بيتسجل في مجموعة login_failures عشان لوحة المراقبة تقدر تكتشف
-      // محاولات الاختراق المحتملة (تكرار فشل كبير على نفس الإيميل خلال وقت قصير) =====
-      async function logFailedAttempt(email, code) {
-        try {
-          await addDoc(collection(db, "login_failures"), {
-            email: email || "-",
-            code: code || "unknown-error",
-            userAgent: navigator.userAgent,
-            timestamp: serverTimestamp()
-          });
-        } catch (e) { console.error("logFailedAttempt error:", e); }
-      }
-
-      // ===== التحقق من عدد الأجهزة المسموح بيها لكل حساب: لو الأدمن حاطط قيمة maxDevices على مستند
-      // المستخدم (users/{uid}) بيتم رفض أي جهاز جديد يتخطى الحد، أما لو مفيش حد محدد فمفيش قيود =====
-      async function checkDeviceLimit(user, deviceId, maxDevices) {
-        if (!maxDevices || maxDevices <= 0) return true;
-        try {
-          const devicesSnap = await getDocs(collection(db, "users", user.uid, "devices"));
-          const existingIds = devicesSnap.docs.map(d => d.id);
-          if (existingIds.includes(deviceId)) return true;
-          return devicesSnap.size < maxDevices;
-        } catch (e) {
-          console.error("checkDeviceLimit error:", e);
-          return true;
-        }
-      }
-
-      // ===== التحقق من حظر جهاز معيّن بعينه: الأدمن يقدر من لوحة المراقبة يمنع جهاز واحد بالتحديد من
-      // الوصول (deviceAllowed = false) حتى لو باقي أجهزة نفس الحساب مسموح لها. الحقل ده لو مش موجود
-      // أصلاً (جهاز لسه محدّش لمسه) بيُعتبر مسموح افتراضيًا =====
-      async function isDeviceBlocked(user, deviceId) {
-        try {
-          const deviceSnap = await getDoc(doc(db, "users", user.uid, "devices", deviceId));
-          return deviceSnap.exists() && deviceSnap.data().deviceAllowed === false;
-        } catch (e) {
-          console.error("isDeviceBlocked error:", e);
-          return false;
-        }
-      }
-
-      // ===== نبضة دورية (heartbeat): بترسل توقيت "الآن" كل فترة ثابتة طول ما الصفحة مفتوحة وواضحة على
-      // الشاشة، سواء على مستوى الحساب كله (users/{uid}.lastActive) أو على مستوى الجهاز نفسه
-      // (users/{uid}/devices/{deviceId}.lastActive). لوحة المراقبة بتقارن آخر نبضة بالوقت الحالي عشان
-      // تحدد "متصل الآن" ولا "غير متصل"، وكمان تعرض توقيت آخر اتصال فعلي =====
-      let __heartbeatTimer = null;
-      function startHeartbeat(user, deviceId) {
-        if (__heartbeatTimer) clearInterval(__heartbeatTimer);
-        const beat = async () => {
-          if (document.visibilityState === "hidden") return;
-          try {
-            await setDoc(doc(db, "users", user.uid), { lastActive: serverTimestamp() }, { merge: true });
-            await setDoc(doc(db, "users", user.uid, "devices", deviceId), { lastActive: serverTimestamp() }, { merge: true });
-          } catch (e) { console.error("heartbeat error:", e); }
-        };
-        beat();
-        __heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
-        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") beat(); });
-      }
-
-      // ===== عدم تذكّر الدخول بين الجلسات: بنجبر Firebase يستخدم "تخزين في الذاكرة فقط" (inMemoryPersistence)
-      // بدل التخزين الدائم الافتراضي، وكمان بنعمل تسجيل خروج إجباري أول ما تُفتح الصفحة عشان نمسح أي جلسة
-      // قديمة كانت محفوظة في المتصفح من قبل هذا التعديل (بطريقة التخزين الدائم القديمة). النتيجة: أي Refresh
-      // أو إغلاق وفتح للصفحة يفرض تسجيل دخول جديد دايماً، ولا يبقى فيه جلسة محفوظة تلقائياً في المتصفح =====
-      if (!__isSharedReadOnlyFile) {
-      signOut(auth).catch(() => { /* تجاهل: مفيش جلسة أصلاً */ }).finally(() => {
-        setPersistence(auth, inMemoryPersistence).then(() => {
-          onAuthStateChanged(auth, async (user) => {
-            if (user) {
-              try {
-                // التحقق من الصلاحية
-                const userDoc = await getDoc(doc(db, "users", user.uid));
-
-                if (userDoc.exists() && userDoc.data().allowed === true) {
-                  const userData = userDoc.data();
-                  const deviceId = getDeviceId();
-                  const deviceBlocked = await isDeviceBlocked(user, deviceId);
-                  if (deviceBlocked) {
-                    await signOut(auth);
-                    const overlay = getOverlay();
-                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تم حظر هذا الجهاز تحديدًا من الوصول لهذا الحساب، حتى لو باقي أجهزتك مسموح لها. تواصل مع مسؤول النظام.</h2>";
-                    return;
-                  }
-                  const allowedDevice = await checkDeviceLimit(user, deviceId, userData.maxDevices);
-                  if (!allowedDevice) {
-                    await signOut(auth);
-                    const overlay = getOverlay();
-                    overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تجاوزت عدد الأجهزة المسموح بها لهذا الحساب (" + userData.maxDevices + " جهاز). تواصل مع مسؤول النظام.</h2>";
-                    return;
-                  }
-                  // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
-                  logLoginEvent(user, deviceId);
-                  startHeartbeat(user, deviceId);
-                  removeOverlay();
-                  // نحمّل التخزين المحلي (السيارات وباقي البيانات) الخاص بهذا الحساب تحديداً الآن، بعد ما
-                  // عرفنا هويته (uid)، عشان بياناته تفضل معزولة تماماً عن أي حساب تاني استُخدم على نفس الجهاز
-                  if (typeof window.initUserScopedStorage === 'function') window.initUserScopedStorage(user.uid);
-                  applyFeatureGating(userData);
-                  if (userData.isAdmin === true) {
-                    addAdminButton();
-                  }
-                } else {
-                  const overlay = getOverlay();
-                  overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
-                }
-              } catch (err) {
-                // فشل التحقق (مشكلة اتصال أو صلاحيات Firestore) → نعرض رسالة واضحة بدل صفحة فاضية
-                console.error("Firestore permission check error:", err);
-                const overlay = getOverlay();
-                overlay.innerHTML = "<div style='text-align:center;margin-top:100px;font-family:Arial;'><h2 style='color:red;'>حدث خطأ أثناء التحقق من الصلاحية</h2><p style='color:#666;'>حاول تحديث الصفحة، ولو استمرت المشكلة تواصل مع مسؤول النظام.</p><p style='color:#999;font-size:13px;'>تفاصيل تقنية: " + (err && err.code ? err.code : (err && err.message ? err.message : String(err))) + "</p></div>";
-              }
-            } else {
-              // مش مسجل دخول → يعرض فورم الدخول
-              showLoginForm();
-            }
-          });
-        });
-      });
-      }
-      function showLoginForm() {
-        const overlay = getOverlay();
-        overlay.innerHTML = `
-          <div style="max-width:380px;margin:90px auto;font-family:'Cairo',Arial,sans-serif;text-align:center;padding:36px 30px;background:#fff;border-radius:18px;box-shadow:0 10px 35px rgba(102,126,234,0.18);border:1px solid #eef0fb;">
-            <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:26px;">🔒</div>
-            <h2 style="margin:0 0 6px;color:#2d2d3a;font-weight:800;">تسجيل الدخول</h2>
-            <p style="margin:0 0 22px;color:#8a8aa3;font-size:13px;">أدخل بياناتك للوصول إلى النظام</p>
-            <input type="email" id="email" placeholder="الإيميل" style="width:100%;padding:13px 14px;margin:6px 0;box-sizing:border-box;border:1.5px solid #e3e3ef;border-radius:10px;font-size:14px;font-family:inherit;outline:none;">
-            <input type="password" id="password" placeholder="كلمة المرور" style="width:100%;padding:13px 14px;margin:6px 0 14px;box-sizing:border-box;border:1.5px solid #e3e3ef;border-radius:10px;font-size:14px;font-family:inherit;outline:none;">
-            <button onclick="login()" style="width:100%;padding:13px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:10px;cursor:pointer;font-size:15px;font-weight:700;font-family:inherit;">دخول</button>
-            <p id="error" style="color:#e5484d;font-size:13px;min-height:16px;margin-top:12px;"></p>
-          </div>
-        `;
-      }
-      window.login = async () => {
-        const email = document.getElementById("email").value;
-        const password = document.getElementById("password").value;
-        try {
-          await signInWithEmailAndPassword(auth, email, password);
-        } catch (err) {
-          // نطبع الخطأ الكامل في الـ Console ونوريه على الشاشة كمان عشان تعرف السبب الحقيقي
-          // (مثلاً: auth/unauthorized-domain, auth/invalid-credential, auth/user-not-found ...)
-          console.error("Login error:", err);
-          const code = err && err.code ? err.code : "unknown-error";
-          let msg = "خطأ في الإيميل أو كلمة المرور";
-          if (code === "auth/unauthorized-domain") {
-            msg = "هذا الدومين غير مصرّح له بتسجيل الدخول (أضِفه في Firebase Console > Authentication > Settings > Authorized domains)";
-          } else if (code === "auth/network-request-failed") {
-            msg = "فشل الاتصال بالشبكة - تحقق من الإنترنت";
-          } else if (code === "auth/too-many-requests") {
-            msg = "محاولات كثيرة جداً، حاول لاحقاً";
-          }
-          document.getElementById("error").textContent = msg + " (" + code + ")";
-          // تسجيل المحاولة الفاشلة عشان لوحة المراقبة تقدر تكتشف محاولات الاختراق المحتملة
-          logFailedAttempt(email, code);
-        }
-      };
-
-      // ===== لوحة مراقبة الأدمن (نسخة متقدمة): زرار عائم بيظهر بس للمستخدم اللي مستنده في users/{uid}
-      // فيه isAdmin === true. اللوحة بتعرض: إحصائيات سريعة، تنبيهات أمنية تلقائية (تعدد الأجهزة / محاولات
-      // فشل مشبوهة)، تبويب المستخدمين (بحث + اسم مُعرّف يدوي + تعديل الحد الأقصى للأجهزة + تفاصيل كل جهاز)،
-      // تبويب سجل الدخول، وتبويب إحصائيات برسم بياني لعدد مرات الدخول خلال آخر 7 أو 30 يوم =====
-      let __adminUsersCache = [];
-      let __adminChartLogs = [];
-
-      // ===== نظام "الصلاحيات" الدقيقة: الأدمن يحدد لكل مستخدم دوره (مستخدم/متابع/مدير/مشرف) وأي من
-      // الوظائف العشرة التالية مسموح له بالوصول إليها. تُخزَّن في users/{uid}.role و users/{uid}.permissions.
-      // أي حساب قديم (من قبل هذه الميزة) بلا هذه الحقول يُعامَل تلقائياً كـ"مستخدم" بكل الصلاحيات مفعّلة،
-      // حتى لا يتعطل أي حساب حالي فجأة بمجرد إضافة الميزة =====
-      const FEATURE_DEFS = [
-        { key: "carsBoard", label: "🚗 لوحة السيارات" },
-        { key: "addCar", label: "➕ إضافة سيارة جديدة" },
-        { key: "delegatesRanking", label: "🏆 ترتيب أداء المناديب" },
-        { key: "sectorReport", label: "📄 تقرير مجمّع بالقطاع" },
-        { key: "dailyCoverage", label: "📍 نسبة تغطية المسار اليومي" },
-        { key: "comparisonReport", label: "📊 تقرير المقارنة" },
-        { key: "jsonExport", label: "💾 نسخة JSON" },
-        { key: "htmlExport", label: "💾 نسخة HTML شاملة" },
-        { key: "importVersion", label: "📂 استيراد نسخة" },
-        { key: "resultsScreen", label: "📈 شاشة النتائج" }
-      ];
-      // ربط كل مفتاح صلاحية بالدالة الأصلية التي تفتح الوظيفة، ومحدد CSS للزر الظاهر بلوحة السيارات (لو له زر ثابت)
-      const FEATURE_GATE_MAP = {
-        carsBoard: { fn: "showVehiclesDashboard", selector: null },
-        addCar: { fn: "startAddVehicle", selector: '[onclick="startAddVehicle()"]' },
-        delegatesRanking: { fn: "showRepRankingReport", selector: '[onclick="showRepRankingReport()"]' },
-        sectorReport: { fn: "exportSectorSummaryPDF", selector: '[onclick="exportSectorSummaryPDF()"]' },
-        dailyCoverage: { fn: "showDailyRouteCoverageScreen", selector: '[onclick="showDailyRouteCoverageScreen()"]' },
-        comparisonReport: { fn: "showComparisonReportScreen", selector: '[onclick="showComparisonReportScreen()"]' },
-        jsonExport: { fn: "exportVehiclesJSON", selector: '[onclick="exportVehiclesJSON()"]' },
-        htmlExport: { fn: "exportVehiclesHTML", selector: '[onclick="exportVehiclesHTML()"]' },
-        importVersion: { fn: "triggerImportVehicles", selector: '[onclick="triggerImportVehicles()"]' },
-        resultsScreen: { fn: "openVehicle", selector: null }
-      };
-      function defaultPermissions() {
-        const p = {};
-        FEATURE_DEFS.forEach(f => p[f.key] = true);
-        return p;
-      }
-      // يدمج صلاحيات محفوظة (لو موجودة) فوق الصلاحيات الافتراضية (كلها مفعّلة)، حتى لو نقصت مفاتيح جديدة أُضيفت لاحقاً
-      function normalizePermissions(saved) {
-        const p = defaultPermissions();
-        if (saved && typeof saved === "object") Object.keys(p).forEach(k => { if (saved[k] === false) p[k] = false; });
-        return p;
-      }
-
-      let __currentUserPerms = defaultPermissions();
-      let __currentUserRole = "user";
-      let __currentUserIsAdmin = false;
-      let __featuresGated = false;
-
-      // يُحدِّث إظهار/إخفاء كل أزرار الوظائف العشرة حسب صلاحيات المستخدم الحالي (يُستدعى عند الدخول وعند أي تحديث لاحق)
-      function refreshFeatureButtonsVisibility() {
-        Object.keys(FEATURE_GATE_MAP).forEach(key => {
-          const sel = FEATURE_GATE_MAP[key].selector;
-          if (!sel) return;
-          document.querySelectorAll(sel).forEach(btn => {
-            btn.style.display = (!__currentUserIsAdmin && __currentUserPerms[key] === false) ? "none" : "";
-          });
-        });
-        const dash = document.getElementById("vehiclesDashboard");
-        const existingMsg = document.getElementById("__no_carsboard_msg__");
-        if (!__currentUserIsAdmin && __currentUserPerms.carsBoard === false) {
-          if (dash && !existingMsg) {
-            const msg = document.createElement("div");
-            msg.id = "__no_carsboard_msg__";
-            msg.style.cssText = "text-align:center;padding:80px 20px;color:#888;font-family:'Cairo',Arial,sans-serif;";
-            msg.innerHTML = "<h2>🔒 ليس لديك صلاحية للوصول إلى لوحة السيارات</h2><p>تواصل مع مسؤول النظام لتفعيل هذه الصلاحية.</p>";
-            if (dash.parentNode) dash.parentNode.insertBefore(msg, dash);
-          }
-        } else if (existingMsg) {
-          existingMsg.remove();
-        }
-      }
-
-      // يُنفَّذ مرة واحدة فقط بعد الدخول: يغلّف كل دالة من الدوال العشرة بحيث تتحقق من الصلاحية قبل التنفيذ
-      function wrapFeatureFunctionsOnce() {
-        if (__featuresGated) return;
-        __featuresGated = true;
-        Object.keys(FEATURE_GATE_MAP).forEach(key => {
-          const fnName = FEATURE_GATE_MAP[key].fn;
-          const original = window[fnName];
-          if (typeof original !== "function") return;
-          window[fnName] = function (...args) {
-            if (__currentUserIsAdmin || __currentUserPerms[key] !== false) {
-              return original.apply(this, args);
-            }
-            alert("ليس لديك صلاحية للوصول إلى هذه الوظيفة. تواصل مع مسؤول النظام.");
-          };
-        });
-      }
-
-      // يُستدعى فور تأكيد الدخول (من onAuthStateChanged) بعد قراءة مستند المستخدم، لضبط صلاحياته على كل الأزرار
-      function applyFeatureGating(userData) {
-        __currentUserRole = userData.role || "user";
-        __currentUserIsAdmin = !!userData.isAdmin;
-        __currentUserPerms = normalizePermissions(userData.permissions);
-        if (__currentUserIsAdmin) { refreshFeatureButtonsVisibility(); return; }
-        wrapFeatureFunctionsOnce();
-        refreshFeatureButtonsVisibility();
-      }
-      window.applyFeatureGating = applyFeatureGating;
-
-      function addAdminButton() {
-        if (document.getElementById("__admin_btn__")) return;
-        const btn = document.createElement("button");
-        btn.id = "__admin_btn__";
-        btn.innerHTML = "📊 لوحة المراقبة";
-        btn.style.cssText = "position:fixed;bottom:22px;left:22px;z-index:999998;padding:13px 20px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:30px;box-shadow:0 6px 18px rgba(102,126,234,0.4);cursor:pointer;font-family:'Cairo',Arial,sans-serif;font-weight:700;font-size:14px;transition:transform .15s ease;";
-        btn.onmouseenter = () => btn.style.transform = "translateY(-2px)";
-        btn.onmouseleave = () => btn.style.transform = "translateY(0)";
-        btn.onclick = () => openAdminPanel();
-        document.body.appendChild(btn);
-      }
-
-      function adminStyles() {
-        if (document.getElementById("__admin_styles__")) return;
-        const style = document.createElement("style");
-        style.id = "__admin_styles__";
-        style.textContent = `
-          #__admin_modal__ * { box-sizing: border-box; font-family: 'Cairo', Arial, sans-serif; }
-          #__admin_modal__ .ap-card { background:#fff; border-radius:16px; padding:0; width:100%; max-width:1080px; max-height:90vh; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
-          #__admin_modal__ .ap-header { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; padding:22px 26px; display:flex; justify-content:space-between; align-items:center; flex-shrink:0; }
-          #__admin_modal__ .ap-header h2 { margin:0; font-size:19px; font-weight:800; display:flex; align-items:center; gap:8px; }
-          #__admin_modal__ .ap-close { background:rgba(255,255,255,0.2); color:#fff; border:none; border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px; }
-          #__admin_modal__ .ap-body { padding:22px 26px; overflow:auto; }
-          #__admin_modal__ .ap-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:18px; }
-          #__admin_modal__ .ap-stat { background:#f7f7fc; border:1px solid #edeef7; border-radius:12px; padding:14px 16px; text-align:center; }
-          #__admin_modal__ .ap-stat b { display:block; font-size:24px; color:#4c4ce0; font-weight:800; }
-          #__admin_modal__ .ap-stat span { font-size:12px; color:#8a8aa3; }
-          #__admin_modal__ .ap-alerts { margin-bottom:18px; }
-          #__admin_modal__ .ap-alert { background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; padding:12px 16px; margin-bottom:8px; font-size:13px; color:#9a3412; display:flex; align-items:flex-start; gap:8px; }
-          #__admin_modal__ .ap-alert.danger { background:#fdeaea; border-color:#f5b5b5; color:#a11515; }
-          #__admin_modal__ .ap-alert b { display:block; margin-bottom:2px; }
-          #__admin_modal__ .ap-tabs { display:flex; gap:6px; margin-bottom:16px; border-bottom:2px solid #f0f0f7; flex-wrap:wrap; }
-          #__admin_modal__ .ap-tab { padding:10px 18px; background:none; border:none; cursor:pointer; font-weight:700; font-size:14px; color:#8a8aa3; border-bottom:2px solid transparent; margin-bottom:-2px; }
-          #__admin_modal__ .ap-tab.active { color:#4c4ce0; border-bottom-color:#4c4ce0; }
-          #__admin_modal__ .ap-search { width:100%; padding:10px 14px; border:1.5px solid #e3e3ef; border-radius:10px; margin-bottom:14px; font-size:14px; font-family:inherit; }
-          #__admin_modal__ table { width:100%; border-collapse:collapse; font-size:13px; }
-          #__admin_modal__ th { background:#f7f7fc; padding:10px 12px; text-align:right; color:#5a5a72; font-weight:700; border-bottom:2px solid #edeef7; position:sticky; top:0; }
-          #__admin_modal__ td { padding:9px 12px; border-bottom:1px solid #f2f2f7; color:#2d2d3a; vertical-align:middle; }
-          #__admin_modal__ tr:hover td { background:#fafaff; }
-          #__admin_modal__ .ap-badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap; }
-          #__admin_modal__ .ap-badge.ok { background:#e7f8ef; color:#1a9d5c; }
-          #__admin_modal__ .ap-badge.no { background:#fdeaea; color:#e5484d; }
-          #__admin_modal__ .ap-badge.admin { background:#efe9fc; color:#764ba2; }
-          #__admin_modal__ .ap-badge.warn { background:#fff3e0; color:#c2650a; }
-          #__admin_modal__ .ap-allow-toggle { border:none; border-radius:20px; padding:4px 12px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; font-family:inherit; }
-          #__admin_modal__ .ap-allow-toggle.ap-allow-on { background:#e7f8ef; color:#1a9d5c; }
-          #__admin_modal__ .ap-allow-toggle.ap-allow-off { background:#fdeaea; color:#e5484d; }
-          #__admin_modal__ .ap-allow-toggle:disabled { opacity:0.6; cursor:wait; }
-          #__admin_modal__ .ap-empty { text-align:center; color:#aaa; padding:30px; }
-          #__admin_modal__ .ap-loading { text-align:center; color:#8a8aa3; padding:40px; }
-          #__admin_modal__ .ap-nickname { border:1px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; width:120px; }
-          #__admin_modal__ .ap-maxdev { border:1px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:13px; font-family:inherit; width:70px; text-align:center; }
-          #__admin_modal__ .ap-savebtn { background:#eef0fd; color:#4c4ce0; border:none; border-radius:6px; padding:5px 9px; font-size:11px; font-weight:700; cursor:pointer; margin-right:4px; }
-          #__admin_modal__ .ap-detailsbtn { background:none; border:1px solid #e3e3ef; border-radius:8px; padding:5px 10px; font-size:12px; cursor:pointer; color:#5a5a72; }
-          #__admin_modal__ .ap-devrow td { background:#fbfbfe; }
-          #__admin_modal__ .ap-devtable { width:100%; border-collapse:collapse; font-size:12px; margin:6px 0; }
-          #__admin_modal__ .ap-devtable th { background:#f0f0f7; font-size:11px; }
-          #__admin_modal__ .ap-chart-controls { display:flex; gap:8px; margin-bottom:14px; }
-          #__admin_modal__ .ap-range-btn { padding:7px 16px; border:1.5px solid #e3e3ef; background:#fff; border-radius:20px; cursor:pointer; font-size:13px; font-weight:700; color:#8a8aa3; }
-          #__admin_modal__ .ap-range-btn.active { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; border-color:transparent; }
-          #__admin_modal__ .ap-role-select { border:1.5px solid #e3e3ef; border-radius:8px; padding:6px 8px; font-size:12px; font-family:inherit; }
-        `;
-        document.head.appendChild(style);
-      }
-
-      // رسم بياني بسيط (بدون أي مكتبة خارجية) لعدد مرات الدخول يوم بيوم
-      function renderLoginChart(days) {
-        const container = document.getElementById("__chart_container__");
-        if (!container) return;
-        const now = new Date();
-        const buckets = [];
-        for (let i = days - 1; i >= 0; i--) {
-          const d = new Date(now);
-          d.setDate(d.getDate() - i);
-          const key = d.toISOString().slice(0, 10);
-          buckets.push({ key, label: d.toLocaleDateString("ar-EG", { day: "2-digit", month: "2-digit" }), count: 0 });
-        }
-        const map = {};
-        buckets.forEach(b => map[b.key] = b);
-        __adminChartLogs.forEach(l => {
-          if (!l.date) return;
-          if (map[l.date]) map[l.date].count++;
-        });
-        const maxCount = Math.max(1, ...buckets.map(b => b.count));
-        const width = Math.max(600, buckets.length * (days > 14 ? 22 : 40));
-        const height = 200;
-        const barGap = 6;
-        const barWidth = (width / buckets.length) - barGap;
-        const chartH = 150;
-        let svg = `<svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;font-family:'Cairo',Arial,sans-serif;">`;
-        buckets.forEach((b, i) => {
-          const barH = (b.count / maxCount) * chartH;
-          const x = i * (barWidth + barGap);
-          const y = chartH - barH + 10;
-          svg += `<rect x="${x}" y="${y}" width="${barWidth}" height="${barH}" rx="4" fill="url(#apGrad)"></rect>`;
-          if (b.count > 0) {
-            svg += `<text x="${x + barWidth / 2}" y="${y - 4}" font-size="10" fill="#4c4ce0" text-anchor="middle" font-weight="700">${b.count}</text>`;
-          }
-          if (days <= 14 || i % Math.ceil(days / 15) === 0) {
-            svg += `<text x="${x + barWidth / 2}" y="${chartH + 26}" font-size="9" fill="#8a8aa3" text-anchor="middle">${b.label}</text>`;
-          }
-        });
-        svg += `<defs><linearGradient id="apGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#764ba2"/><stop offset="100%" stop-color="#667eea"/></linearGradient></defs>`;
-        svg += `</svg>`;
-        container.innerHTML = svg;
-      }
-
-      async function openAdminPanel() {
-        if (document.getElementById("__admin_modal__")) return;
-        adminStyles();
-        const modal = document.createElement("div");
-        modal.id = "__admin_modal__";
-        modal.style.cssText = "position:fixed;inset:0;background:rgba(20,20,35,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;direction:rtl;";
-        modal.innerHTML = `
-          <div class="ap-card">
-            <div class="ap-header">
-              <h2>📊 لوحة المراقبة</h2>
-              <button class="ap-close" id="__close_admin__">✕</button>
-            </div>
-            <div class="ap-body">
-              <div id="__admin_content__" class="ap-loading">جاري التحميل...</div>
-            </div>
-          </div>
-        `;
-        document.body.appendChild(modal);
-        document.getElementById("__close_admin__").onclick = () => modal.remove();
-        modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
-
-        const content = document.getElementById("__admin_content__");
-        try {
-          // ---- جلب المستخدمين + أجهزتهم بالتفصيل ----
-          const usersSnap = await getDocs(collection(db, "users"));
-          const users = [];
-          for (const uDoc of usersSnap.docs) {
-            const u = uDoc.data();
-            const devicesSnap = await getDocs(collection(db, "users", uDoc.id, "devices"));
-            const devices = devicesSnap.docs.map(dd => {
-              const dv = dd.data();
-              const lastActiveMs = dv.lastActive && dv.lastActive.toDate ? dv.lastActive.toDate().getTime()
-                : (dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().getTime() : 0);
-              return {
-                id: dd.id,
-                userAgent: dv.userAgent || "-",
-                platform: dv.platform || "-",
-                screen: dv.screen || "-",
-                lastSeen: dv.lastSeen && dv.lastSeen.toDate ? dv.lastSeen.toDate().toLocaleString("ar-EG") : "-",
-                firstSeen: dv.firstSeen && dv.firstSeen.toDate ? dv.firstSeen.toDate().toLocaleString("ar-EG") : "-",
-                loginCount: dv.loginCount || 1,
-                lastActiveMs,
-                allowed: dv.deviceAllowed !== false
-              };
-            });
-            // آخر نشاط للحساب ككل = الأحدث بين نبضة الحساب نفسه ونبضات كل أجهزته (تحسّبًا لحسابات
-            // سجّلت دخول قبل إضافة نظام النبضة، بيتم الاعتماد على آخر ظهور جهاز مسجّل بدلاً منها)
-            const topLevelActiveMs = u.lastActive && u.lastActive.toDate ? u.lastActive.toDate().getTime() : 0;
-            const deviceMaxActiveMs = devices.reduce((m, d) => Math.max(m, d.lastActiveMs || 0), 0);
-            const lastActiveMs = Math.max(topLevelActiveMs, deviceMaxActiveMs);
-            users.push({
-              id: uDoc.id,
-              email: u.email || uDoc.id,
-              nickname: u.nickname || "",
-              allowed: !!u.allowed,
-              isAdmin: !!u.isAdmin,
-              devices,
-              maxDevices: u.maxDevices || null,
-              lastActiveMs,
-              online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS,
-              permissions: normalizePermissions(u.permissions)
-            });
-          }
-          __adminUsersCache = users;
-
-          // ---- جلب آخر 50 عملية دخول (للعرض في الجدول) ----
-          const logsSnap = await getDocs(query(collection(db, "login_logs"), orderBy("timestamp", "desc"), limit(50)));
-          const logs = [];
-          logsSnap.forEach(d => {
-            const l = d.data();
-            logs.push({
-              email: l.email || l.uid,
-              time: l.timestamp && l.timestamp.toDate ? l.timestamp.toDate().toLocaleString("ar-EG") : "-",
-              platform: (l.platform || "") + (l.screen ? " · " + l.screen : ""),
-              ip: l.ip || "-"
-            });
-          });
-
-          // ---- جلب سجل أوسع لعمليات الدخول (لآخر 30 يوم) لرسم البياني ----
-          let chartLogsRaw = [];
-          try {
-            const chartSnap = await getDocs(query(collection(db, "login_logs"), orderBy("timestamp", "desc"), limit(1500)));
-            chartSnap.forEach(d => {
-              const l = d.data();
-              if (l.timestamp && l.timestamp.toDate) {
-                chartLogsRaw.push({ date: l.timestamp.toDate().toISOString().slice(0, 10) });
-              }
-            });
-          } catch (e) { console.error("chart logs fetch error:", e); }
-          __adminChartLogs = chartLogsRaw;
-
-          // ---- جلب محاولات الدخول الفاشلة (آخر 24 ساعة) لاكتشاف محاولات الاختراق المحتملة ----
-          let failureAlerts = [];
-          try {
-            const failSnap = await getDocs(query(collection(db, "login_failures"), orderBy("timestamp", "desc"), limit(300)));
-            const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-            const countsByEmail = {};
-            failSnap.forEach(d => {
-              const f = d.data();
-              const t = f.timestamp && f.timestamp.toDate ? f.timestamp.toDate().getTime() : 0;
-              if (t >= cutoff) {
-                const key = f.email || "-";
-                countsByEmail[key] = (countsByEmail[key] || 0) + 1;
-              }
-            });
-            failureAlerts = Object.entries(countsByEmail)
-              .filter(([email, count]) => count >= 5)
-              .map(([email, count]) => ({ email, count }));
-          } catch (e) {
-            // مجموعة login_failures ممكن تكون غير موجودة لسه (هتتعمل تلقائي مع أول محاولة فاشلة) — تجاهل الخطأ
-            console.warn("login_failures fetch skipped:", e.message);
-          }
-
-          // ---- تنبيه استخدام نفس الحساب على أكثر من جهاز ----
-          const multiDeviceUsers = users.filter(u => u.devices.length > 1);
-
-          // ---- تنبيه فتح نفس الحساب من نوع جهاز مختلف (نظام/منصة مختلفة عن باقي أجهزته المسجّلة) ----
-          const deviceTypeMismatchUsers = users
-            .map(u => ({ u, platforms: [...new Set(u.devices.map(d => d.platform).filter(p => p && p !== "-"))] }))
-            .filter(x => x.platforms.length > 1);
-
-          const totalUsers = users.length;
-          const allowedCount = users.filter(u => u.allowed).length;
-          const adminCount = users.filter(u => u.isAdmin).length;
-          const totalDevices = users.reduce((s, u) => s + u.devices.length, 0);
-          const onlineCount = users.filter(u => u.online).length;
-
-          let alertsHtml = "";
-          if (failureAlerts.length || multiDeviceUsers.length || deviceTypeMismatchUsers.length) {
-            alertsHtml += `<div class="ap-alerts">`;
-            failureAlerts.forEach(a => {
-              alertsHtml += `<div class="ap-alert danger">⚠️ <div><b>محاولات دخول فاشلة مشبوهة</b>الحساب <b>${a.email}</b> فشل الدخول به ${a.count} مرة خلال آخر 24 ساعة — قد تكون محاولة اختراق.</div></div>`;
-            });
-            multiDeviceUsers.forEach(u => {
-              alertsHtml += `<div class="ap-alert">📱 <div><b>استخدام متعدد الأجهزة</b>الحساب <b>${u.nickname || u.email}</b> مسجّل دخول من ${u.devices.length} أجهزة مختلفة.</div></div>`;
-            });
-            deviceTypeMismatchUsers.forEach(({ u, platforms }) => {
-              alertsHtml += `<div class="ap-alert danger">🖥️ <div><b>تسجيل دخول من نوع جهاز مختلف</b>الحساب <b>${u.nickname || u.email}</b> تم فتحه من أنواع أجهزة مختلفة (${platforms.join(" / ")}) — تأكد إن ده فعلاً نفس صاحب الحساب.</div></div>`;
-            });
-            alertsHtml += `</div>`;
-          }
-
-          content.className = "";
-          content.innerHTML = `
-            <div class="ap-stats">
-              <div class="ap-stat"><b>${totalUsers}</b><span>إجمالي المستخدمين</span></div>
-              <div class="ap-stat"><b>${onlineCount}</b><span>🟢 متصل الآن</span></div>
-              <div class="ap-stat"><b>${allowedCount}</b><span>لهم صلاحية دخول</span></div>
-              <div class="ap-stat"><b>${adminCount}</b><span>أدمن</span></div>
-              <div class="ap-stat"><b>${totalDevices}</b><span>إجمالي الأجهزة</span></div>
-            </div>
-            ${alertsHtml}
-            <div class="ap-tabs">
-              <button class="ap-tab active" data-tab="users">المستخدمون</button>
-              <button class="ap-tab" data-tab="logs">سجل الدخول</button>
-              <button class="ap-tab" data-tab="chart">الإحصائيات</button>
-              <button class="ap-tab" data-tab="permissions">🔐 الصلاحيات</button>
-            </div>
-            <div id="__tab_users__">
-              <input type="text" id="__user_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
-              <div style="overflow:auto;max-height:44vh;">
-                <table>
-                  <thead><tr><th>الاسم</th><th>الإيميل</th><th>الحالة</th><th>الصلاحية</th><th>النوع</th><th>الأجهزة</th><th>الحد الأقصى</th><th></th></tr></thead>
-                  <tbody id="__users_tbody__"></tbody>
-                </table>
-              </div>
-            </div>
-            <div id="__tab_logs__" style="display:none;">
-              <div style="overflow:auto;max-height:50vh;">
-                <table>
-                  <thead><tr><th>الإيميل</th><th>الوقت</th><th>الجهاز</th><th>IP</th></tr></thead>
-                  <tbody id="__logs_tbody__"></tbody>
-                </table>
-              </div>
-            </div>
-            <div id="__tab_chart__" style="display:none;">
-              <div class="ap-chart-controls">
-                <button class="ap-range-btn active" data-range="7">آخر 7 أيام</button>
-                <button class="ap-range-btn" data-range="30">آخر 30 يوم</button>
-              </div>
-              <div id="__chart_container__" style="overflow-x:auto;"></div>
-            </div>
-            <div id="__tab_permissions__" style="display:none;">
-              <p style="font-size:12px;color:#8a8aa3;margin:0 0 12px;">
-                حدّد لكل مستخدم دوره، وأي الوظائف مسموح له بالوصول إليها. المستخدم "متابع" يقدر كمان تحدّد له
-                أي مستخدمي "مدير"/"مشرف" يظهر له نتائجهم (قطاع معيّن لكل مدير، أو مجموعته الكاملة لكل مشرف).
-              </p>
-              <input type="text" id="__perm_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
-              <div style="overflow:auto;max-height:56vh;">
-                <table>
-                  <thead><tr><th>المستخدم</th><th>الوظائف المسموحة</th><th></th></tr></thead>
-                  <tbody id="__perm_tbody__"></tbody>
-                </table>
-              </div>
-            </div>
-          `;
-
-          // ---- عرض/بحث جدول المستخدمين ----
-          function renderUsers(filter) {
-            const tbody = document.getElementById("__users_tbody__");
-            const f = (filter || "").trim().toLowerCase();
-            const rows = __adminUsersCache.filter(u =>
-              !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
-            );
-            if (rows.length === 0) {
-              tbody.innerHTML = `<tr><td colspan="8" class="ap-empty">لا يوجد نتائج</td></tr>`;
-              return;
-            }
-            tbody.innerHTML = rows.map(u => {
-              const statusBadge = u.online
-                ? '<span class="ap-badge ok">🟢 متصل الآن</span>'
-                : '<span class="ap-badge no">⚪ غير متصل</span>';
-              const lastSeenText = u.lastActiveMs
-                ? new Date(u.lastActiveMs).toLocaleString("ar-EG")
-                : "لم يسجّل دخول بعد";
-              return `
-              <tr>
-                <td><input class="ap-nickname" data-uid="${u.id}" value="${(u.nickname || '').replace(/"/g,'&quot;')}" placeholder="بدون اسم"></td>
-                <td>${u.email}</td>
-                <td>${statusBadge}<div style="font-size:11px;color:#8a8aa3;margin-top:3px;">${lastSeenText}</div></td>
-                <td><button class="ap-allow-toggle ${u.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${u.id}" data-allowed="${u.allowed ? '1' : '0'}">${u.allowed ? '✅ مسموح' : '❌ ممنوع'}</button></td>
-                <td>${u.isAdmin ? '<span class="ap-badge admin">أدمن</span>' : 'مستخدم'}</td>
-                <td>${u.devices.length}${u.devices.length > 1 ? ' <span class="ap-badge warn">⚠️ متعدد</span>' : ''}</td>
-                <td><input type="number" min="0" class="ap-maxdev" data-uid="${u.id}" value="${u.maxDevices || ''}" placeholder="∞"></td>
-                <td><button class="ap-detailsbtn" data-uid="${u.id}">الأجهزة ▾</button></td>
-              </tr>
-              <tr class="ap-devrow" id="__devrow_${u.id}__" style="display:none;">
-                <td colspan="8">${renderDeviceDetails(u.devices, u.id)}</td>
-              </tr>
-            `; }).join("");
-
-            // حفظ الاسم المُعرّف عند فقد التركيز
-            tbody.querySelectorAll(".ap-nickname").forEach(inp => {
-              inp.addEventListener("change", async (e) => {
-                const uid = e.target.dataset.uid;
-                try {
-                  await updateDoc(doc(db, "users", uid), { nickname: e.target.value.trim() });
-                  const u = __adminUsersCache.find(x => x.id === uid);
-                  if (u) u.nickname = e.target.value.trim();
-                } catch (err) {
-                  console.error("save nickname error:", err);
-                  alert("تعذّر حفظ الاسم — تحقق من صلاحيات Firestore Rules");
-                }
-              });
-            });
-
-            // حفظ الحد الأقصى للأجهزة عند فقد التركيز
-            tbody.querySelectorAll(".ap-maxdev").forEach(inp => {
-              inp.addEventListener("change", async (e) => {
-                const uid = e.target.dataset.uid;
-                const val = e.target.value === "" ? null : parseInt(e.target.value, 10);
-                try {
-                  await updateDoc(doc(db, "users", uid), { maxDevices: val });
-                  const u = __adminUsersCache.find(x => x.id === uid);
-                  if (u) u.maxDevices = val;
-                } catch (err) {
-                  console.error("save maxDevices error:", err);
-                  alert("تعذّر حفظ الحد الأقصى — تحقق من صلاحيات Firestore Rules");
-                }
-              });
-            });
-
-            // تبديل صلاحية الوصول للصفحة (مسموح / ممنوع) بضغطة واحدة
-            tbody.querySelectorAll(".ap-allow-toggle").forEach(btn => {
-              btn.addEventListener("click", async (e) => {
-                const target = e.currentTarget;
-                const uid = target.dataset.uid;
-                const next = target.dataset.allowed !== "1";
-                target.disabled = true;
-                try {
-                  await updateDoc(doc(db, "users", uid), { allowed: next });
-                  const u = __adminUsersCache.find(x => x.id === uid);
-                  if (u) u.allowed = next;
-                  target.dataset.allowed = next ? "1" : "0";
-                  target.textContent = next ? "✅ مسموح" : "❌ ممنوع";
-                  target.className = "ap-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
-                  const allowedStat = document.querySelector("#__admin_modal__ .ap-stats .ap-stat:nth-child(3) b");
-                  if (allowedStat) allowedStat.textContent = __adminUsersCache.filter(x => x.allowed).length;
-                } catch (err) {
-                  console.error("toggle allowed error:", err);
-                  alert("تعذّر تغيير الصلاحية — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على مستندات users)");
-                } finally {
-                  target.disabled = false;
-                }
-              });
-            });
-
-            // إظهار/إخفاء تفاصيل الأجهزة
-            tbody.querySelectorAll(".ap-detailsbtn").forEach(btn => {
-              btn.addEventListener("click", (e) => {
-                const uid = e.target.dataset.uid;
-                const row = document.getElementById("__devrow_" + uid + "__");
-                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
-              });
-            });
-
-            // تبديل صلاحية الوصول لجهاز معيّن بعينه (مسموح / محظور)، بغض النظر عن باقي أجهزة نفس الحساب
-            tbody.querySelectorAll(".ap-device-allow-toggle").forEach(btn => {
-              btn.addEventListener("click", async (e) => {
-                const target = e.currentTarget;
-                const uid = target.dataset.uid;
-                const deviceId = target.dataset.deviceId;
-                const next = target.dataset.allowed !== "1";
-                target.disabled = true;
-                try {
-                  await updateDoc(doc(db, "users", uid, "devices", deviceId), { deviceAllowed: next });
-                  const u = __adminUsersCache.find(x => x.id === uid);
-                  if (u) {
-                    const d = u.devices.find(x => x.id === deviceId);
-                    if (d) d.allowed = next;
-                  }
-                  target.dataset.allowed = next ? "1" : "0";
-                  target.textContent = next ? "✅ مسموح" : "⛔ محظور";
-                  target.className = "ap-device-allow-toggle " + (next ? "ap-allow-on" : "ap-allow-off");
-                } catch (err) {
-                  console.error("toggle device allowed error:", err);
-                  alert("تعذّر تغيير صلاحية الجهاز — تحقق من صلاحيات Firestore Rules (لازم تسمح للأدمن بالـ update على users/{uid}/devices/{deviceId})");
-                } finally {
-                  target.disabled = false;
-                }
-              });
-            });
-          }
-
-          function renderDeviceDetails(devices, uid) {
-            if (!devices.length) return `<div class="ap-empty" style="padding:14px;">لا توجد أجهزة مسجّلة لهذا المستخدم</div>`;
-            const nowMs = Date.now();
-            let html = `<table class="ap-devtable"><thead><tr><th>معرف الجهاز</th><th>النظام</th><th>الشاشة</th><th>الحالة</th><th>الوصول</th><th>أول ظهور</th><th>آخر ظهور</th><th>عدد الدخول</th></tr></thead><tbody>`;
-            devices.forEach(d => {
-              const online = d.lastActiveMs > 0 && (nowMs - d.lastActiveMs) < ONLINE_THRESHOLD_MS;
-              html += `<tr>
-                <td style="font-size:11px;">${d.id}</td>
-                <td>${d.platform}</td>
-                <td>${d.screen}</td>
-                <td>${online ? '🟢 متصل' : '⚪ غير متصل'}</td>
-                <td><button class="ap-device-allow-toggle ${d.allowed ? 'ap-allow-on' : 'ap-allow-off'}" data-uid="${uid}" data-device-id="${d.id}" data-allowed="${d.allowed ? '1' : '0'}">${d.allowed ? '✅ مسموح' : '⛔ محظور'}</button></td>
-                <td>${d.firstSeen}</td>
-                <td>${d.lastSeen}</td>
-                <td>${d.loginCount}</td>
-              </tr>`;
-            });
-            html += `</tbody></table>`;
-            return html;
-          }
-
-          // ---- عرض/بحث جدول "الصلاحيات": دور كل مستخدم + الوظائف المسموحة له + (للمتابع فقط) تحديد
-          // أي مديرين/مشرفين يظهر لهم نتائجهم ----
-          function renderPermissionsTab(filter) {
-            const tbody = document.getElementById("__perm_tbody__");
-            if (!tbody) return;
-            const f = (filter || "").trim().toLowerCase();
-            const rows = __adminUsersCache.filter(u =>
-              !f || u.email.toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f)
-            );
-            if (rows.length === 0) {
-              tbody.innerHTML = `<tr><td colspan="3" class="ap-empty">لا يوجد نتائج</td></tr>`;
-              return;
-            }
-            tbody.innerHTML = rows.map(u => {
-              const permCount = FEATURE_DEFS.filter(f2 => u.permissions[f2.key] !== false).length;
-              return `
-              <tr>
-                <td>${u.nickname || u.email}${u.isAdmin ? ' <span class="ap-badge admin">أدمن</span>' : ''}<div style="font-size:11px;color:#8a8aa3;">${u.email}</div></td>
-                <td>${permCount} / ${FEATURE_DEFS.length}</td>
-                <td>
-                  <button class="ap-detailsbtn ap-permbtn" data-uid="${u.id}">⚙️ الوظائف ▾</button>
-                </td>
-              </tr>
-              <tr class="ap-devrow" id="__permrow_${u.id}__" style="display:none;">
-                <td colspan="3">${renderPermChecklist(u)}</td>
-              </tr>
-            `; }).join("");
-
-            // إظهار/إخفاء صف الوظائف
-            tbody.querySelectorAll(".ap-permbtn").forEach(btn => {
-              btn.addEventListener("click", (e) => {
-                const uid = e.target.dataset.uid;
-                const row = document.getElementById("__permrow_" + uid + "__");
-                if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
-              });
-            });
-
-            bindPermChecklistEvents();
-          }
-
-          // يبني شبكة تشيك بوكس للوظائف العشرة الخاصة بمستخدم معيّن
-          function renderPermChecklist(u) {
-            const boxes = FEATURE_DEFS.map(f2 => `
-              <label style="display:flex;align-items:center;gap:6px;font-size:12px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:7px 10px;">
-                <input type="checkbox" class="ap-perm-check" data-uid="${u.id}" data-key="${f2.key}" ${u.permissions[f2.key] !== false ? "checked" : ""}>
-                ${f2.label}
-              </label>
-            `).join("");
-            return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:12px;background:#fbfbfe;border-radius:10px;">${boxes}</div>`;
-          }
-
-          function bindPermChecklistEvents() {
-            document.querySelectorAll(".ap-perm-check").forEach(cb => {
-              cb.addEventListener("change", async (e) => {
-                const uid = e.target.dataset.uid;
-                const key = e.target.dataset.key;
-                const u = __adminUsersCache.find(x => x.id === uid);
-                if (!u) return;
-                const newPerms = Object.assign({}, u.permissions, { [key]: e.target.checked });
-                e.target.disabled = true;
-                try {
-                  await updateDoc(doc(db, "users", uid), { permissions: newPerms });
-                  u.permissions = newPerms;
-                  renderPermissionsTab(document.getElementById("__perm_search__").value);
-                  const row = document.getElementById("__permrow_" + uid + "__");
-                  if (row) row.style.display = "table-row";
-                } catch (err) {
-                  console.error("save permissions error:", err);
-                  alert("تعذّر حفظ الصلاحية — تحقق من صلاحيات Firestore Rules");
-                  e.target.checked = !e.target.checked;
-                } finally {
-                  e.target.disabled = false;
-                }
-              });
-            });
-          }
-
-          renderUsers("");
-          document.getElementById("__user_search__").addEventListener("input", (e) => renderUsers(e.target.value));
-          document.getElementById("__perm_search__").addEventListener("input", (e) => renderPermissionsTab(e.target.value));
-
-          // ---- جدول سجل الدخول ----
-          const logsTbody = document.getElementById("__logs_tbody__");
-          logsTbody.innerHTML = logs.length ? logs.map(l => `
-            <tr>
-              <td>${l.email}</td>
-              <td>${l.time}</td>
-              <td style="font-size:12px;">${l.platform}</td>
-              <td>${l.ip}</td>
-            </tr>
-          `).join("") : `<tr><td colspan="4" class="ap-empty">لا يوجد سجلات دخول بعد</td></tr>`;
-
-          // ---- تبويبات ----
-          modal.querySelectorAll(".ap-tab").forEach(tab => {
-            tab.onclick = () => {
-              modal.querySelectorAll(".ap-tab").forEach(t => t.classList.remove("active"));
-              tab.classList.add("active");
-              document.getElementById("__tab_users__").style.display = tab.dataset.tab === "users" ? "block" : "none";
-              document.getElementById("__tab_logs__").style.display = tab.dataset.tab === "logs" ? "block" : "none";
-              document.getElementById("__tab_chart__").style.display = tab.dataset.tab === "chart" ? "block" : "none";
-              document.getElementById("__tab_permissions__").style.display = tab.dataset.tab === "permissions" ? "block" : "none";
-              if (tab.dataset.tab === "chart") {
-                const activeRange = modal.querySelector(".ap-range-btn.active");
-                renderLoginChart(activeRange ? parseInt(activeRange.dataset.range, 10) : 7);
-              }
-              if (tab.dataset.tab === "permissions") {
-                renderPermissionsTab("");
-              }
-            };
-          });
-
-          // ---- تبديل نطاق الرسم البياني (7 / 30 يوم) ----
-          modal.querySelectorAll(".ap-range-btn").forEach(btn => {
-            btn.onclick = () => {
-              modal.querySelectorAll(".ap-range-btn").forEach(b => b.classList.remove("active"));
-              btn.classList.add("active");
-              renderLoginChart(parseInt(btn.dataset.range, 10));
-            };
-          });
-        } catch (e) {
-          console.error("openAdminPanel error:", e);
-          content.className = "";
-          content.innerHTML = "<p style='color:#e5484d;text-align:center;padding:30px;'>حدث خطأ أثناء تحميل بيانات لوحة المراقبة. تحقق من صلاحيات Firestore Rules الخاصة بالأدمن (لازم قاعدة تسمح لصاحب isAdmin=true بقراءة users و login_logs و login_failures بالكامل، وكمان تسمح له بالكتابة (update) على مستندات users).</p>";
-        }
-      }
-      window.openAdminPanel = openAdminPanel;
-    </script>
-
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تحليل مسارات KML و GPX - Ahmed Ali</title>
@@ -4006,6 +3049,9 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
 <style id="systemCopyHiddenTools">
 #cardSmartUpload,
+#cardTrack,
+#cardPolygon,
+#cardClients,
 #cardInvoices,
 button[onclick*="showSwapSuspicionReport()"],#swapSuspicionModal,
 button[onclick*="showViolationVisitScreen()"],#violationVisitScreen,
@@ -4017,11 +3063,9 @@ button[onclick*="showBoundaryDrawingScreen()"],#boundaryDrawingScreen,
 button[onclick*="showExportRegionScreen()"],#exportRegionScreen,
 button[onclick*="showSharedCustomersScreen()"],#sharedCustomersScreen,
 button[onclick*="showEliteClientsReport()"],#eliteClientsReportModal,
-button[onclick*="showComparisonReportScreen()"],#comparisonReportScreen,
 button[onclick*="showScheduledRouteReportScreen()"],#scheduledRouteReportScreen,
 button[onclick*="showFullSectorReportModal()"],#fullSectorReportModal,
 button[onclick*="showDriverReviewModal()"],#driverReviewModal,
-button[onclick*="showSupervisorGroupReportModal()"],#supervisorGroupReportModal,
 button[onclick*="showSectorVisitsReport()"],#sectorVisitsReportModal,
 button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
 #toolsToolbarDropdown { display: none !important; }
@@ -4110,44 +3154,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     <input type="file" id="importVehiclesInput" accept=".json,.html" multiple="" style="display:none;" onchange="handleImportVehiclesFile(event)">
                 </div>
             </div>
-            <div class="fleet-overview-cards" id="fleetOverviewCards" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;">
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">🚗</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">91</div>
-                    <div style="font-size:11.5px;color:#6c757d;">سيارات لديها بيانات</div>
-                </div>
-            
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">🛣️</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">١٧٩٬٩١١</div>
-                    <div style="font-size:11.5px;color:#6c757d;">إجمالي المسافة (كم)</div>
-                </div>
-            
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">✅</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">١٦٬١٧٧</div>
-                    <div style="font-size:11.5px;color:#6c757d;">وقفات داخل الحدود</div>
-                </div>
-            
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">❌</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">١٣٥٬٨٥٩</div>
-                    <div style="font-size:11.5px;color:#6c757d;">وقفات خارج الحدود</div>
-                </div>
-            
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">⚡</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">4%</div>
-                    <div style="font-size:11.5px;color:#6c757d;">متوسط كفاءة الوقت</div>
-                </div>
-            
-                <div style="flex:1;min-width:140px;background:#f8f9fb;border-radius:10px;padding:10px 14px;text-align:center;border:1px solid #eee;">
-                    <div style="font-size:20px;">🚨</div>
-                    <div style="font-size:18px;font-weight:800;color:#333;">28769</div>
-                    <div style="font-size:11.5px;color:#6c757d;">تنبيهات مفتوحة</div>
-                </div>
-            </div>
-            <div class="storage-status ok" id="storageStatus">💾 الحفظ التلقائي مفعّل على هذا الجهاز/المتصفح (91 سيارة محفوظة)</div>
+            <div class="fleet-overview-cards" id="fleetOverviewCards" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0;"></div>
+            <div class="storage-status ok" id="storageStatus">💾 الحفظ التلقائي مفعّل على هذا الجهاز/المتصفح (0 سيارة محفوظة)</div>
             <div class="vehicles-text-filters">
                 <label class="vtf-item vtf-quick-search">
                     🔎 بحث سريع (اسم/كود مندوب/رقم مركبة/منطقة/قطاع)
@@ -4179,73 +3187,17 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             </div>
             <div class="supervisor-filter">
                 <span class="sf-label">🧑‍💼 فلترة حسب المشرف (اختيار واحد أو أكثر):</span>
-                <div class="supervisor-chips" id="supervisorChips"><span class="supervisor-chip all-chip active" onclick="toggleSupervisorFilter(null)">👥 الكل</span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('ابراهيم صالح')">🧑‍💼 ابراهيم صالح</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('ابراهيم صالح')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('ابراهيم صالح')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد كامل')">🧑‍💼 احمد كامل</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد كامل')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد كامل')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد وليد')">🧑‍💼 محمد وليد</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد وليد')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد وليد')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('عمرو الباشا')">🧑‍💼 عمرو الباشا</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('عمرو الباشا')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('عمرو الباشا')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد حمد')">🧑‍💼 احمد حمد</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد حمد')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد حمد')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('مصطفي مهدي')">🧑‍💼 مصطفي مهدي</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('مصطفي مهدي')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('مصطفي مهدي')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد جمال')">🧑‍💼 احمد جمال</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد جمال')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد جمال')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('خالد السيد')">🧑‍💼 خالد السيد</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('خالد السيد')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('خالد السيد')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('عاطف فيصل')">🧑‍💼 عاطف فيصل</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('عاطف فيصل')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('عاطف فيصل')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد ابراهيم')">🧑‍💼 احمد ابراهيم</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد ابراهيم')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد ابراهيم')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('سيد محمد')">🧑‍💼 سيد محمد</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('سيد محمد')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('سيد محمد')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد هارون')">🧑‍💼 محمد هارون</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد هارون')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد هارون')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('محمد قاسم')">🧑‍💼 محمد قاسم</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('محمد قاسم')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('محمد قاسم')">🗑️</button>
-                    </span><span class="supervisor-chip ">
-                        <span class="chip-label" onclick="toggleSupervisorFilter('احمد وجدي')">🧑‍💼 احمد وجدي</span>
-                        <button type="button" class="chip-edit-btn" title="تعديل اسم المشرف" onclick="event.stopPropagation(); editSupervisorName('احمد وجدي')">✏️</button>
-                        <button type="button" class="chip-delete-btn" title="حذف المشرف" onclick="event.stopPropagation(); deleteSupervisorName('احمد وجدي')">🗑️</button>
-                    </span></div>
+                <div class="supervisor-chips" id="supervisorChips"><span class="supervisor-chip all-chip active" onclick="toggleSupervisorFilter(null)">👥 الكل</span></div>
                 <button type="button" class="btn-delete-filtered-vehicles" id="deleteFilteredVehiclesBtn" onclick="deleteFilteredVehiclesFromDashboard()" title="حذف كل بيانات المناديب المطابقين للفلاتر الحالية المُطبَّقة فوق (المناديب المحددين، أو مجموعة مشرف، أو اسم قطاع معيّن)">🗑️ حذف كل المطابق للفلتر الحالي</button>
             </div>
             <div class="supervisor-summary" id="supervisorSummary" style="display:none;"></div>
             <div class="vehicles-grid" id="vehiclesGrid"></div>
-            <div class="vehicles-empty" id="vehiclesEmpty" style="display:none;">
+            <div class="vehicles-empty" id="vehiclesEmpty" style="display: block;">
                 <div class="icon">🚗</div>
                 <p>لا توجد سيارات مضافة بعد. اضغط "إضافة سيارة جديدة" للبدء.</p>
             </div>
         </div>
-        <datalist id="supervisorsList"><option value="ابراهيم صالح"></option><option value="احمد كامل"></option><option value="محمد وليد"></option><option value="عمرو الباشا"></option><option value="احمد حمد"></option><option value="مصطفي مهدي"></option><option value="احمد جمال"></option><option value="خالد السيد"></option><option value="عاطف فيصل"></option><option value="احمد ابراهيم"></option><option value="سيد محمد"></option><option value="محمد هارون"></option><option value="محمد قاسم"></option><option value="احمد وجدي"></option></datalist>
+        <datalist id="supervisorsList"></datalist>
 
         <!-- ===== شاشة منفصلة: "زيارة مخالفة" - فحص هل قامت سيارة/مسار معيّن بزيارة (وقفة) عند لوكيشن عميل محدد أم لا ===== -->
         <div id="violationVisitScreen" class="vehicles-dashboard" style="display:none;">
@@ -5995,7 +4947,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         </div>
     </div>
 
-    <div class="toast-notification error" id="toastNotification" style="display: none;">⚠️ لسه ما عملتش نسخة احتياطية من بياناتك - يُفضّل عمل نسخة الآن حماية للبيانات (زر "نسخة JSON")</div>
+    <div class="toast-notification" id="toastNotification"></div>
 
     <!-- ===== طبقة التحميل العامة: تظهر بدل تجمد الصفحة أثناء رفع/معالجة الملفات، وتعرض نص الحالة + شريط تقدّم + النسبة المئوية ===== -->
     <div class="gp-overlay" id="globalProgressOverlay">
@@ -14703,27 +13655,71 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 return { coord: bestCoord, dist: bestDist };
             };
 
+            // ===== [إصلاح أداء حرج - تجمد المتصفح عند رفع/فلترة شيت فواتير كبير] =====
+            // كانت مطابقة كل فاتورة مع العملاء تتم بمسح كامل مصفوفة clientsData مرتين (مرة لمطابقة الكود
+            // ومرة لإيجاد أقرب عميل جغرافياً) لكل فاتورة على حدة - أي بتعقيد O(عدد الفواتير × عدد العملاء).
+            // مع آلاف الفواتير وآلاف العملاء هذا يعني ملايين عمليات حساب مسافة (haversineDistance) منفذة
+            // دفعة واحدة على الخيط الرئيسي بدون أي استراحة، وهو ما كان يُجمّد المتصفح فعلياً (ويؤدي أحياناً
+            // لانهياره) فور رفع شيت الفواتير، ويتكرر مرة أخرى مع كل حرف يكتبه المستخدم في فلتر البحث
+            // (applyInvoicesComparisonFilter تنادي هذه الدالة من جديد بالكامل في كل مرة).
+            // الحل: نبني فهرسين خفيفين مرة واحدة فقط قبل حلقة الفواتير:
+            //  1) فهرس Map لكود العميل → فهرسه (مطابقة O(1) بدل مسح كامل).
+            //  2) فهرس شبكي جغرافي (spatial grid) بحجم خلية = نطاق المطابقة proximityRange نفسه، بحيث نفحص
+            //     فقط عملاء الخلية المحيطة بموقع الفاتورة وجيرانها الثماني (3×3) بدل كل العملاء - وهذا يغطي
+            //     رياضياً أي عميل يقع فعلياً ضمن نطاق proximityRange من الفاتورة، فلا يفوتنا أي تطابق حقيقي.
+            // بهذا يتحول التعقيد إلى O(عدد الفواتير + عدد العملاء) تقريباً بدل الضرب بينهما =====
+            const clientCodeIndex = new Map();
+            clientsData.forEach((c, cIdx) => {
+                if (!c.code) return;
+                const key = normCode(c.code);
+                if (!clientCodeIndex.has(key)) clientCodeIndex.set(key, cIdx);
+            });
+
+            const cellSizeMeters = Math.max(proximityRange, 25);
+            const cellSizeDeg = cellSizeMeters / 111320;
+            const clientGrid = new Map();
+            const gridKey = (lat, lon) => Math.floor(lat / cellSizeDeg) + ',' + Math.floor(lon / cellSizeDeg);
+            clientsData.forEach((c, cIdx) => {
+                if (typeof c.lat !== 'number' || typeof c.lon !== 'number' || isNaN(c.lat) || isNaN(c.lon)) return;
+                const key = gridKey(c.lat, c.lon);
+                if (!clientGrid.has(key)) clientGrid.set(key, []);
+                clientGrid.get(key).push(cIdx);
+            });
+            // بيرجع أقرب عميل (فهرسه ومسافته) بفحص خلية موقع الفاتورة والخلايا الثماني المحيطة بها فقط -
+            // كافٍ رياضياً لإيجاد أي عميل ضمن مسافة proximityRange من نقطة البحث (لأن حجم الخلية = النطاق نفسه)
+            const findNearestClientInRange = (lat, lon) => {
+                if (typeof lat !== 'number' || typeof lon !== 'number') return { idx: -1, dist: Infinity };
+                const gx = Math.floor(lat / cellSizeDeg), gy = Math.floor(lon / cellSizeDeg);
+                let bestIdx = -1, bestDist = Infinity;
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const bucket = clientGrid.get((gx + dx) + ',' + (gy + dy));
+                        if (!bucket) continue;
+                        for (const cIdx of bucket) {
+                            const c = clientsData[cIdx];
+                            const d = haversineDistance(lat, lon, c.lat, c.lon);
+                            if (d < bestDist) { bestDist = d; bestIdx = cIdx; }
+                        }
+                    }
+                }
+                return { idx: bestIdx, dist: bestDist };
+            };
+
             const results = invoicesData.map((inv, invIdx) => {
                 let matchedIdx = -1, matchType = null;
 
-                // 1) مطابقة بكود العميل (لو كود العميل متاح في كل من ملف الفواتير وملف العملاء)
+                // 1) مطابقة بكود العميل - عبر الفهرس الجاهز (O(1)) بدل مسح كل العملاء لكل فاتورة
                 if (inv.clientCode) {
-                    clientsData.forEach((c, cIdx) => {
-                        if (matchedIdx === -1 && c.code && normCode(c.code) === normCode(inv.clientCode)) matchedIdx = cIdx;
-                    });
+                    const codeIdx = clientCodeIndex.get(normCode(inv.clientCode));
+                    if (codeIdx !== undefined) matchedIdx = codeIdx;
                     if (matchedIdx !== -1) matchType = 'code';
                 }
 
-                // 2) لو مفيش تطابق بالكود، جرّب أقرب عميل جغرافياً ضمن نطاق الفاتورة الحالي (بالمتر)
+                // 2) لو مفيش تطابق بالكود، جرّب أقرب عميل جغرافياً ضمن نطاق الفاتورة الحالي (بالمتر) - عبر الفهرس الشبكي
                 if (matchedIdx === -1 && clientsData.length > 0 && typeof inv.lat === 'number' && typeof inv.lon === 'number') {
-                    let bestIdx = -1, bestDist = Infinity;
-                    clientsData.forEach((c, cIdx) => {
-                        const d = haversineDistance(inv.lat, inv.lon, c.lat, c.lon);
-                        if (d < bestDist) { bestDist = d; bestIdx = cIdx; }
-                    });
-                    if (bestIdx !== -1 && bestDist <= proximityRange) { matchedIdx = bestIdx; matchType = 'nearest'; }
+                    const nearest = findNearestClientInRange(inv.lat, inv.lon);
+                    if (nearest.idx !== -1 && nearest.dist <= proximityRange) { matchedIdx = nearest.idx; matchType = 'nearest'; }
                 }
-
                 // موقع "العميل" المعتمد لهذه الفاتورة: أولوية لموقعه المُضمَّن صراحة في نفس شيت الفواتير
                 // (خط طول/عرض العميل) لأنه الأدق والمرتبط مباشرة بهذه الفاتورة، وإلا فموقعه من ملف العملاء المطابق
                 const hasEmbeddedClientLoc = typeof inv.clientLat === 'number' && typeof inv.clientLon === 'number';
@@ -19569,8 +18565,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                         // تُلحَق ببياناته الآن تلقائياً بمجرد معرفة كوده =====
                         const claimedNow = claimPendingInvoicesForCode(currentDriverCodeForDistribution);
                         if (claimedNow.length > 0) {
-                            const existingCodes = new Set(invoicesData.map(inv => inv.invoiceCode));
-                            invoicesData = invoicesData.concat(claimedNow.filter(r => !existingCodes.has(r.invoiceCode)));
+                            const existingCodes = new Set(invoicesData.map(invoiceDedupKey));
+                            invoicesData = invoicesData.concat(claimedNow.filter(r => {
+                                const key = invoiceDedupKey(r);
+                                if (!key || existingCodes.has(key)) return false;
+                                existingCodes.add(key);
+                                return true;
+                            }));
                         }
                         let toastMsg = '';
                         if (invoicesDistribution.distributedReps.length > 0) {
@@ -19894,15 +18895,15 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // كود المشرف، اسم المشرف، كود القطاع، اسم القطاع، تاريخ الفاتورة، وقت تسجيل الموقع،
         // الإجمالي قبل/بعد الخصم والضريبة، خط العرض، خط الطول
         // الاكتشاف مرن (بالاعتماد على كلمات مفتاحية) حتى لو اختلفت صياغة العناوين قليلاً بين نسخ الشيت
-        function parseInvoicesExcel(arrayBuffer) {
-            // ملاحظة هامة (إصلاح): لازم نمرر cellDates:true حتى يقرأ SheetJS خلايا التاريخ المُنسّقة في الإكسيل
-            // كـ كائن Date حقيقي مباشرة، بدل رقمها التسلسلي الخام (Excel serial number) الذي كان
-            // يُفسَّر خطأً كملي ثانية منذ 1970 فيُنتج تاريخ 1970/1/1 غلط تماماً لكل فواتير الشيت.
-            const workbook = xlsxReadAny(arrayBuffer, { type: 'array', cellDates: true });
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = xlsxSheetToJsonAny(firstSheet, { defval: '' });
+        const MAX_INVOICE_IMPORT_ROWS = 250000;
+        const MAX_BULK_INVOICE_FILE_BYTES = 60 * 1024 * 1024;
+
+        function parseInvoiceRowsFromJsonData(jsonData) {
             const rows = [];
             if (!jsonData || jsonData.length === 0) return rows;
+            if (jsonData.length > MAX_INVOICE_IMPORT_ROWS) {
+                throw new Error(`الملف يحتوي على أكثر من ${MAX_INVOICE_IMPORT_ROWS.toLocaleString('ar-EG')} صف؛ تم رفضه لحماية المتصفح من استهلاك الذاكرة`);
+            }
             const headers = Object.keys(jsonData[0] || {});
             const find = (re) => headers.find(h => re.test(h.trim()));
 
@@ -19990,6 +18991,63 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             return rows;
         }
 
+        function parseInvoicesExcel(arrayBuffer) {
+            // ملاحظة هامة (إصلاح): لازم نمرر cellDates:true حتى يقرأ SheetJS خلايا التاريخ المُنسّقة في الإكسيل
+            // كـ كائن Date حقيقي مباشرة، بدل رقمها التسلسلي الخام (Excel serial number) الذي كان
+            // يُفسَّر خطأً كملي ثانية منذ 1970 فيُنتج تاريخ 1970/1/1 غلط تماماً لكل فواتير الشيت.
+            const workbook = xlsxReadAny(arrayBuffer, { type: 'array', cellDates: true, sheetRows: MAX_INVOICE_IMPORT_ROWS + 1 });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = xlsxSheetToJsonAny(firstSheet, { defval: '' });
+            return parseInvoiceRowsFromJsonData(jsonData);
+        }
+
+        // قراءة XLSX في Worker تمنع عملية XLSX.read الثقيلة من تجميد واجهة البرنامج.
+        // يتم إرسال الصفوف النهائية فقط من الـ Worker، وليس workbook أو مصفوفة الخلايا الخام.
+        async function parseInvoicesExcelAsync(arrayBuffer) {
+            if (!isBinaryWorkbookBuffer(arrayBuffer) || typeof Worker === 'undefined' || typeof Blob === 'undefined' || !window.URL || !URL.createObjectURL) {
+                return parseInvoicesExcel(arrayBuffer);
+            }
+            const workerSource = `
+                importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+                self.onmessage = function(event) {
+                    try {
+                        const workbook = XLSX.read(event.data, {
+                            type: 'array',
+                            cellDates: true,
+                            sheetRows: ${MAX_INVOICE_IMPORT_ROWS + 1}
+                        });
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+                        const MAX_INVOICE_IMPORT_ROWS = ${MAX_INVOICE_IMPORT_ROWS};
+                        const mapRows = ${parseInvoiceRowsFromJsonData.toString()};
+                        self.postMessage({ ok: true, rows: mapRows(jsonData) });
+                    } catch (error) {
+                        self.postMessage({ ok: false, error: error && error.message ? error.message : String(error) });
+                    }
+                };
+            `;
+            const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }));
+            const worker = new Worker(workerUrl);
+            try {
+                return await new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => reject(new Error('انتهت مهلة تحليل ملف XLSX؛ جرّب ملفاً أصغر أو بصيغة CSV')), 180000);
+                    worker.onmessage = event => {
+                        clearTimeout(timer);
+                        if (event.data && event.data.ok) resolve(event.data.rows || []);
+                        else reject(new Error(event.data && event.data.error ? event.data.error : 'تعذر تحليل ملف XLSX'));
+                    };
+                    worker.onerror = event => {
+                        clearTimeout(timer);
+                        reject(new Error('تعذر تشغيل قارئ XLSX في الخلفية'));
+                    };
+                    worker.postMessage(arrayBuffer, [arrayBuffer]);
+                });
+            } finally {
+                worker.terminate();
+                URL.revokeObjectURL(workerUrl);
+            }
+        }
+
         // ===== توزّع مصفوفة صفوف فواتير (من ملف/ملفات فواتير عملاء تم رفعها في مربع "فواتير العملاء") على كل
         // سيارة/مندوب مسجَّل بالفعل في لوحة السيارات (vehiclesStore) بمطابقة "كود المندوب" (repCode) في كل صف
         // مع "driverCode" الخاص بالسيارة المحفوظة. بهذا لو رفعت شيت فواتير شامل فيه فواتير لعدة مناديب مسجَّلين
@@ -20007,23 +19065,33 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         //   السيارة الحالية، وتُلحَق تلقائياً بصاحبها الحقيقي فور تسجيله =====
         async function distributeInvoicesToRegisteredVehicles(rows, currentDriverCode, excludeVehicleId) {
             const ownRows = [];
-            const rowsByRepCode = {};
+            const rowsByRepCode = Object.create(null);
             const normalizedCurrentCode = normalizeRepCode(currentDriverCode);
-
-            rows.forEach(row => {
+            const seenInputRows = new Set();
+            for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                const row = rows[rowIndex];
+                const inputKey = invoiceDedupKey(row);
+                if (!inputKey || seenInputRows.has(inputKey)) continue;
+                seenInputRows.add(inputKey);
                 const repCode = normalizeRepCode(row.repCode);
                 // بدون كود مندوب في الصف، أو نفس كود المندوب الحالي => تبقى ضمن السيارة الحالية كالمعتاد
                 if (!repCode || repCode === normalizedCurrentCode) {
                     ownRows.push(row);
-                    return;
+                } else {
+                    if (!rowsByRepCode[repCode]) rowsByRepCode[repCode] = [];
+                    rowsByRepCode[repCode].push(row);
                 }
-                if (!rowsByRepCode[repCode]) rowsByRepCode[repCode] = [];
-                rowsByRepCode[repCode].push(row);
-            });
+                if (rowIndex > 0 && rowIndex % 5000 === 0) {
+                    updateProgressOverlay(null, `تم فحص ${rowIndex.toLocaleString('ar-EG')} صف...`, '📦 جاري تجهيز توزيع الفواتير...');
+                    await gpYield();
+                }
+            }
 
             const distributedReps = [];
             let distributedCount = 0;
             let pendingCount = 0;
+            let pendingChanged = false;
+            const vehiclesToPersist = [];
 
             // ===== [تحسين أداء مهم] بدل البحث عن السيارة المطابقة لكل كود مندوب بمسح كل السيارات المحفوظة من
             // جديد في كل مرة (Object.values(vehiclesStore).find(...) داخل الحلقة) - وهو ما كان بيسبب تجمد
@@ -20056,7 +19124,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 const repCode = repCodes[ri];
                 const repRows = rowsByRepCode[repCode];
                 // كل 40 مندوب نسيب المتصفح يرسم/يستجيب بدل ما يتجمد لحد ما كل المناديب تتوزع
-                if (ri % 40 === 0) {
+                if (ri % 20 === 0) {
                     updateProgressOverlay((ri / repCodes.length) * 100, `مندوب ${ri + 1} / ${repCodes.length}`, '📦 جاري توزيع الفواتير على السيارات...');
                     await gpYield();
                 }
@@ -20074,24 +19142,37 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                     // هو خلل "تداخل بيانات المناديب" المُبلَّغ عنه). بدلاً من ذلك، تُحفَظ في "مخزن الفواتير
                     // المعلَّقة" بانتظار تسجيل صاحبها الحقيقي كسيارة مستقلة، وتُلحَق ببياناته تلقائياً وقتها
                     // (راجع claimPendingInvoicesForCode) - فلا تضيع الفاتورة ولا تختلط بمندوب آخر خطأً =====
-                    addRowsToPendingInvoices(repCode, repRows);
-                    pendingCount += repRows.length;
+                    const addedPendingCount = addRowsToPendingInvoices(repCode, repRows, true);
+                    pendingChanged = addedPendingCount > 0 || pendingChanged;
+                    pendingCount += addedPendingCount;
                     continue;
                 }
                 // منع تكرار نفس الفاتورة لو أُعيد رفع نفس الشيت (أو شيت يحتوي فواتير سابقة) أكثر من مرة
                 const existingInvoices = targetVehicle.invoicesData || [];
-                const existingCodes = new Set(existingInvoices.map(inv => inv.invoiceCode));
-                const newRowsForTarget = repRows.filter(r => !existingCodes.has(r.invoiceCode));
+                const existingCodes = new Set(existingInvoices.map(invoiceDedupKey));
+                const newRowsForTarget = [];
+                for (let rowIndex = 0; rowIndex < repRows.length; rowIndex++) {
+                    const row = repRows[rowIndex];
+                    const dedupKey = invoiceDedupKey(row);
+                    if (dedupKey && !existingCodes.has(dedupKey)) {
+                        existingCodes.add(dedupKey);
+                        newRowsForTarget.push(row);
+                    }
+                    if (rowIndex > 0 && rowIndex % 2000 === 0) await gpYield();
+                }
                 if (newRowsForTarget.length > 0) {
                     targetVehicle.invoicesData = existingInvoices.concat(newRowsForTarget);
                     if (!targetVehicle.invoicesFileName) {
                         targetVehicle.invoicesFileName = invoicesFileName || 'فواتير موزَّعة تلقائياً حسب كود المندوب';
                     }
-                    dbPutVehicle(targetVehicle);
+                    vehiclesToPersist.push(targetVehicle);
                     distributedReps.push({ driverCode: repCode, driverName: targetVehicle.driverName, count: newRowsForTarget.length });
                     distributedCount += newRowsForTarget.length;
                 }
             }
+
+            if (pendingChanged) dbSavePendingInvoices(pendingInvoicesByRepCode);
+            if (vehiclesToPersist.length > 0) dbPutVehiclesBatch(vehiclesToPersist);
 
             // ===== تحديث لوحة السيارات فوراً لو كانت ظاهرة حالياً، حتى تنعكس أعداد الفواتير الجديدة لكل مندوب
             // بدون الحاجة لإعادة تحميل الصفحة أو فتح كل سيارة يدوياً =====
@@ -20568,6 +19649,30 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             }
         }
 
+        // حفظ مجموعة سيارات في معاملة واحدة. الرفع الشامل قد يحدّث عشرات/مئات السيارات؛
+        // فتح معاملة وقراءة/كتابة localStorage لكل مندوب كان يضاعف استهلاك الذاكرة ويضغط
+        // على IndexedDB بلا داعٍ.
+        function dbPutVehiclesBatch(vehicles) {
+            if (!vehicles || vehicles.length === 0) return;
+            if (fleetDB) {
+                try {
+                    const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
+                    const store = tx.objectStore(VEHICLES_STORE);
+                    vehicles.forEach(vehicle => store.put(vehicle));
+                    return;
+                } catch (e) { console.warn('تعذر حفظ مجموعة السيارات محلياً:', e); }
+            }
+            if (useLocalStorageFallback) {
+                try {
+                    const map = lsGetVehiclesMap();
+                    vehicles.forEach(vehicle => {
+                        map[vehicle.id] = serializeVehicleForExport(vehicle);
+                    });
+                    lsSaveVehiclesMap(map);
+                } catch (e) { console.warn('تعذر حفظ مجموعة السيارات في localStorage:', e); }
+            }
+        }
+
         function dbDeleteVehicleRecord(id) {
             // ===== نحذف دايماً من الـ localStorage (لو موجودة نسخة قديمة فيها) حتى لو IndexedDB هي المصدر
             // النشط حالياً، لضمان عدم بقاء أي نسخة "كاش" قديمة للبيانات المحذوفة ممكن ترجع تظهر لاحقاً =====
@@ -20715,16 +19820,45 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
         }
 
+        // مفتاح تكرار لا يعتمد على رقم افتراضي مثل "فاتورة 1"؛ لأن هذا الرقم يتكرر
+        // عند رفع ملفين مختلفين، وكان يؤدي إلى إسقاط فواتير صحيحة بالخطأ.
+        function invoiceDedupKey(row) {
+            if (!row) return '';
+            const code = String(row.invoiceCode || '').trim();
+            if (code && !/^فاتورة\s+\d+$/i.test(code)) return `code:${code.toLowerCase()}`;
+            const dateKey = value => {
+                if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString();
+                return String(value == null ? '' : value).trim();
+            };
+            return [
+                'row',
+                String(row.clientCode || '').trim().toLowerCase(),
+                String(row.repCode || '').trim().toLowerCase(),
+                Number.isFinite(Number(row.lat)) ? Number(row.lat).toFixed(7) : '',
+                Number.isFinite(Number(row.lon)) ? Number(row.lon).toFixed(7) : '',
+                dateKey(row.invoiceDate),
+                dateKey(row.locationTime),
+                String(row.clientNameFromSheet || row.name || '').trim().toLowerCase()
+            ].join('|');
+        }
+
         // يضيف صفوف فواتير جديدة لمندوب لسه غير مسجَّل لمخزن الانتظار (مع دمج آمن يمنع تكرار نفس رقم الفاتورة)
-        function addRowsToPendingInvoices(repCode, rows) {
+        function addRowsToPendingInvoices(repCode, rows, deferSave) {
             const key = normalizeRepCode(repCode);
-            if (!key || rows.length === 0) return;
+            if (!key || !rows || rows.length === 0) return 0;
             const existing = pendingInvoicesByRepCode[key] || [];
-            const existingCodes = new Set(existing.map(r => r.invoiceCode));
-            const newOnes = rows.filter(r => !existingCodes.has(r.invoiceCode));
-            if (newOnes.length === 0) return;
+            const existingCodes = new Set(existing.map(invoiceDedupKey));
+            const newOnes = [];
+            rows.forEach(row => {
+                const dedupKey = invoiceDedupKey(row);
+                if (!dedupKey || existingCodes.has(dedupKey)) return;
+                existingCodes.add(dedupKey);
+                newOnes.push(row);
+            });
+            if (newOnes.length === 0) return 0;
             pendingInvoicesByRepCode[key] = existing.concat(newOnes);
-            dbSavePendingInvoices(pendingInvoicesByRepCode);
+            if (!deferSave) dbSavePendingInvoices(pendingInvoicesByRepCode);
+            return newOnes.length;
         }
 
         // يُستدعى عند حفظ سيارة/مندوب لأول مرة بكود مندوب معيّن - يسحب أي فواتير كانت معلَّقة بانتظاره
@@ -20982,19 +20116,51 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             }
             showProgressOverlay('💾 جاري تجهيز النسخة الاحتياطية...', 'نسخة JSON');
             await gpYield();
-            const payload = buildExportPayload();
-            updateProgressOverlay(null, 'جاري تجهيز الملف للتنزيل...');
-            await gpYield();
-            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `نسخة_احتياطية_السيارات_${new Date().toISOString().slice(0, 10)}.json`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            markBackupDone();
-            hideProgressOverlay();
-            showToast('💾 تم تنزيل النسخة الاحتياطية (JSON) على جهازك', 'success');
+            try {
+                // ===== [إصلاح] المشكلة الأصلية: كان يتم بناء كل بيانات السيارات في جسم واحد (object) ثم تحويله
+                // بالكامل لسلسلة نصية واحدة ضخمة عبر JSON.stringify() في نفس اللحظة (بدون أي فرصة تنفس للمتصفح
+                // أثناءها). مع الكميات الكبيرة من البيانات (مئات الآلاف من نقاط GPS ووقفات لعشرات/مئات السيارات)،
+                // ده كان بيسبب: (أ) تجمد كامل للمتصفح لدقائق طويلة، (ب) وأحياناً فشل صامت تماماً (لا رسالة خطأ
+                // ولا ملف) بسبب تجاوز الحد الأقصى لطول السلسلة النصية في محرك JavaScript أو نفاد الذاكرة أثناء
+                // إنشاء نسخة نصية إضافية من نفس البيانات الضخمة - وهو نفس ما لاحظه المستخدم (انتظار طويل جداً ثم
+                // عدم إنشاء أي نسخة في النهاية).
+                // الحل: نبني الملف كـ"أجزاء" نصية منفصلة (كل سيارة على حدة تُحوَّل لسلسلة صغيرة بمفردها) ونمررها
+                // لـ Blob مباشرة كمصفوفة أجزاء - المتصفح يجمّعها بكفاءة من غير الحاجة لسلسلة واحدة متصلة عملاقة في
+                // الذاكرة. كمان بنّدي فرصة تنفس (gpYield) للمتصفح كل 10 سيارات مع تحديث نسبة تقدّم حقيقية بدل
+                // الشريط المتحرك الثابت، وبنلف كل حاجة في try/catch عشان أي خطأ يظهر برسالة واضحة فوراً بدل ما
+                // المستخدم يستنى لحد ما "شبكة الأمان" (دقيقتين) تخفي الشاشة من غير أي تفسير =====
+                const vehiclesList = Object.values(vehiclesStore);
+                const total = vehiclesList.length;
+                const parts = [
+                    '{"version":"1.0","exportedAt":' + JSON.stringify(new Date().toISOString()) +
+                    ',"supervisorsRegistry":' + JSON.stringify(supervisorsRegistry) + ',"vehicles":['
+                ];
+                for (let i = 0; i < total; i++) {
+                    if (i > 0) parts.push(',');
+                    parts.push(JSON.stringify(serializeVehicleForExport(vehiclesList[i])));
+                    if (i % 10 === 9 || i === total - 1) {
+                        updateProgressOverlay(Math.round(((i + 1) / total) * 90), `جاري تجهيز بيانات السيارات... (${i + 1}/${total})`);
+                        await gpYield();
+                    }
+                }
+                parts.push(']}');
+                updateProgressOverlay(95, 'جاري تجهيز الملف للتنزيل...');
+                await gpYield();
+                const blob = new Blob(parts, { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `نسخة_احتياطية_السيارات_${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                markBackupDone();
+                hideProgressOverlay();
+                showToast('💾 تم تنزيل النسخة الاحتياطية (JSON) على جهازك', 'success');
+            } catch (e) {
+                hideProgressOverlay();
+                console.error('exportVehiclesJSON error:', e);
+                showToast('⚠️ حصل خطأ أثناء تجهيز النسخة الاحتياطية: ' + (e && e.message ? e.message : 'خطأ غير معروف') + ' - جرّب "نسخة HTML شاملة" بدلاً منها لو استمرت المشكلة', 'error', 9000);
+            }
         }
 
         // ===== أداة مساعدة: تُدرِج نصاً قبل "آخر" ظهور لعلامة معينة (مثلاً </body>) بدل أول ظهور. مهم جداً هنا
@@ -25311,78 +24477,117 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             });
         }
 
+        let bulkInvoiceDistributeBusy = false;
+
         async function processBulkInvoiceDistributeFiles(files) {
             const statusEl = document.getElementById('statusBulkInvoiceDistribute');
             const resultEl = document.getElementById('bulkInvoiceDistributeResult');
-            const xlsxFiles = files.filter(f => /\.(xlsx|csv)$/i.test(f.name));
+            const safe = value => String(value == null ? '' : value)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            if (bulkInvoiceDistributeBusy) {
+                showToast('⏳ ما زال رفع سابق قيد المعالجة؛ انتظر اكتماله قبل رفع ملف آخر', 'info');
+                return;
+            }
+            const xlsxFiles = (files || []).filter(f => /\.(xlsx|csv)$/i.test(f.name));
             if (xlsxFiles.length === 0) {
                 showToast('❌ الملف المرفوع لازم يكون بصيغة xlsx أو csv', 'error');
                 return;
             }
-            statusEl.textContent = `⏳ جاري تحليل ${xlsxFiles.length} ملف...`;
-            resultEl.innerHTML = '';
-            showProgressOverlay('📤 جاري رفع الملفات...', `0 / ${xlsxFiles.length}`);
-            await gpYield();
 
-            let allRows = [];
+            bulkInvoiceDistributeBusy = true;
             const fileNames = [];
             const parseErrors = [];
-            for (let fi = 0; fi < xlsxFiles.length; fi++) {
-                const file = xlsxFiles[fi];
-                updateProgressOverlay((fi / xlsxFiles.length) * 100, `${file.name} (${fi + 1} / ${xlsxFiles.length})`, '📤 جاري رفع ومعالجة الملفات...');
+            const repsSummary = new Map();
+            let totalParsed = 0;
+            let totalDistributed = 0;
+            let totalPending = 0;
+            let totalUnassigned = 0;
+            try {
+                if (statusEl) statusEl.textContent = `⏳ جاري تحليل ${xlsxFiles.length} ملف...`;
+                if (resultEl) resultEl.innerHTML = '';
+                showProgressOverlay('📤 جاري رفع الملفات...', `0 / ${xlsxFiles.length}`);
                 await gpYield();
-                try {
-                    const arrayBuffer = await readFileAsArrayBuffer(file);
-                    const parsed = parseInvoicesExcel(arrayBuffer);
-                    if (parsed.length > 0) {
-                        allRows = allRows.concat(parsed);
-                        fileNames.push(file.name);
-                    } else {
-                        parseErrors.push(`لم يتم العثور على بيانات فواتير صالحة في "${file.name}"`);
+
+                // نعالج ملفاً ثم نوزّعه فوراً بدلاً من تجميع كل الملفات في allRows؛
+                // بذلك لا تبقى نسخ متعددة من نفس الشيت في ذاكرة التبويب.
+                for (let fi = 0; fi < xlsxFiles.length; fi++) {
+                    const file = xlsxFiles[fi];
+                    updateProgressOverlay((fi / xlsxFiles.length) * 100, `${safe(file.name)} (${fi + 1} / ${xlsxFiles.length})`, '📤 جاري رفع ومعالجة الملفات...');
+                    await gpYield();
+                    if (file.size > MAX_BULK_INVOICE_FILE_BYTES) {
+                        parseErrors.push(`تم تجاهل "${file.name}" لأن حجمه أكبر من ${Math.round(MAX_BULK_INVOICE_FILE_BYTES / (1024 * 1024))} ميجابايت لحماية المتصفح`);
+                        continue;
                     }
-                } catch (err) {
-                    console.error('خطأ في قراءة ملف الفواتير:', err);
-                    parseErrors.push(`خطأ في قراءة "${file.name}": ${err.message}`);
+                    try {
+                        const arrayBuffer = await readFileAsArrayBuffer(file);
+                        const parsed = await parseInvoicesExcelAsync(arrayBuffer);
+                        if (parsed.length === 0) {
+                            parseErrors.push(`لم يتم العثور على بيانات فواتير صالحة في "${file.name}"`);
+                        } else {
+                            fileNames.push(file.name);
+                            totalParsed += parsed.length;
+                            updateProgressOverlay(null, `تم تحليل ${parsed.length.toLocaleString('ar-EG')} صفاً من "${safe(file.name)}"`, '🔄 جاري توزيع البيانات...');
+                            // بدون كود مندوب حالي وبدون سيارة مُستثناة - كل صف يُوزَّع بمطابقة كوده فقط
+                            const dist = await distributeInvoicesToRegisteredVehicles(parsed, '', null);
+                            totalDistributed += dist.distributedCount;
+                            totalPending += dist.pendingCount;
+                            totalUnassigned += dist.ownRows.length;
+                            dist.distributedReps.forEach(rep => {
+                                const key = normalizeRepCode(rep.driverCode) || rep.driverCode;
+                                const previous = repsSummary.get(key);
+                                if (previous) previous.count += rep.count;
+                                else repsSummary.set(key, { driverCode: rep.driverCode, driverName: rep.driverName, count: rep.count });
+                            });
+                            // فك المراجع الكبيرة قبل الانتقال للملف التالي.
+                            parsed.length = 0;
+                        }
+                    } catch (err) {
+                        console.error('خطأ في قراءة/توزيع ملف الفواتير:', err);
+                        parseErrors.push(`خطأ في "${file.name}": ${err && err.message ? err.message : String(err)}`);
+                    }
+                    updateProgressOverlay(((fi + 1) / xlsxFiles.length) * 100, `${fi + 1} / ${xlsxFiles.length}`);
+                    await gpYield();
                 }
-                updateProgressOverlay(((fi + 1) / xlsxFiles.length) * 100, `${fi + 1} / ${xlsxFiles.length}`);
-            }
 
-            if (allRows.length === 0) {
+                if (totalParsed === 0) {
+                    if (statusEl) statusEl.textContent = 'لم يتم رفع أي ملفات بعد';
+                    if (resultEl) resultEl.innerHTML = `<div style="padding:14px;background:#fff5f5;border:1px solid #ffc9c9;border-radius:10px;color:#c92a2a;font-size:13px;">❌ ${parseErrors.length > 0 ? parseErrors.map(safe).join('<br>') : 'لم يتم العثور على أي بيانات فواتير صالحة في الملف/الملفات المرفوعة'}</div>`;
+                    return;
+                }
+
+                if (statusEl) statusEl.textContent = `✅ تم رفع: ${fileNames.map(safe).join('، ')}`;
+                const repsRows = Array.from(repsSummary.values())
+                    .sort((a, b) => b.count - a.count)
+                    .map(r => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;">${safe(r.driverName || '—')}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;">${safe(r.driverCode)}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:#2e8b57;">${r.count}</td></tr>`)
+                    .join('');
+                if (resultEl) resultEl.innerHTML = `
+                    <div style="padding:14px;background:#f0fdf4;border:1px solid #b2f2bb;border-radius:10px;margin-bottom:12px;font-size:13px;color:#2b8a3e;">
+                        ✅ تم تحليل <b>${totalParsed.toLocaleString('ar-EG')}</b> فاتورة من ${fileNames.length} ملف.<br>
+                        📦 تم توزيع <b>${totalDistributed.toLocaleString('ar-EG')}</b> فاتورة تلقائياً على <b>${repsSummary.size.toLocaleString('ar-EG')}</b> من المناديب المسجَّلين بالفعل في لوحة السيارات.<br>
+                        ${totalPending > 0 ? `⏳ <b>${totalPending.toLocaleString('ar-EG')}</b> فاتورة لمناديب غير مسجَّلين بعد كسيارات اتحفظت في مخزن الانتظار.` : ''}
+                        ${totalUnassigned > 0 ? `<br>⚠️ <b>${totalUnassigned.toLocaleString('ar-EG')}</b> صف بدون كود مندوب لم يتم توزيعه في أداة التوزيع الشامل.` : ''}
+                    </div>
+                    ${repsRows ? `
+                    <div style="max-height:300px;overflow-y:auto;border:1px solid #e2e5f0;border-radius:10px;">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                            <thead style="position:sticky;top:0;background:#f1f3f9;">
+                                <tr><th style="padding:6px 10px;text-align:right;">المندوب</th><th style="padding:6px 10px;">الكود</th><th style="padding:6px 10px;">عدد الفواتير الموزَّعة</th></tr>
+                            </thead>
+                            <tbody>${repsRows}</tbody>
+                        </table>
+                    </div>` : ''}
+                    ${parseErrors.length > 0 ? `<div style="margin-top:10px;font-size:12px;color:#c92a2a;">${parseErrors.map(safe).join('<br>')}</div>` : ''}
+                `;
+            } catch (err) {
+                console.error('خطأ غير متوقع في الرفع الشامل:', err);
+                if (statusEl) statusEl.textContent = 'حدث خطأ أثناء المعالجة';
+                if (resultEl) resultEl.innerHTML = `<div style="padding:14px;background:#fff5f5;border:1px solid #ffc9c9;border-radius:10px;color:#c92a2a;font-size:13px;">❌ تعذر إكمال التوزيع: ${safe(err && err.message ? err.message : err)}</div>`;
+                showToast('❌ حدث خطأ أثناء توزيع الفواتير؛ لم يتم ترك طبقة التحميل مفتوحة', 'error', 7000);
+            } finally {
+                bulkInvoiceDistributeBusy = false;
                 hideProgressOverlay();
-                statusEl.textContent = 'لم يتم رفع أي ملفات بعد';
-                resultEl.innerHTML = `<div style="padding:14px;background:#fff5f5;border:1px solid #ffc9c9;border-radius:10px;color:#c92a2a;font-size:13px;">❌ ${parseErrors.length > 0 ? parseErrors.join('<br>') : 'لم يتم العثور على أي بيانات فواتير صالحة في الملف/الملفات المرفوعة'}</div>`;
-                return;
             }
-
-            updateProgressOverlay(null, 'جاري توزيع الفواتير على السيارات...', '🔄 جاري معالجة البيانات...');
-            await gpYield();
-            statusEl.textContent = `✅ تم رفع: ${fileNames.join('، ')}`;
-            // بدون كود مندوب حالي وبدون سيارة مُستثناة - كل صف يُوزَّع بمطابقة كوده فقط على السيارات المسجَّلة
-            const dist = await distributeInvoicesToRegisteredVehicles(allRows, '', null);
-
-            const repsRows = dist.distributedReps
-                .sort((a, b) => b.count - a.count)
-                .map(r => `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;">${r.driverName || '—'}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;">${r.driverCode}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:#2e8b57;">${r.count}</td></tr>`)
-                .join('');
-
-            resultEl.innerHTML = `
-                <div style="padding:14px;background:#f0fdf4;border:1px solid #b2f2bb;border-radius:10px;margin-bottom:12px;font-size:13px;color:#2b8a3e;">
-                    ✅ تم تحليل <b>${allRows.length}</b> فاتورة من ${fileNames.length} ملف.<br>
-                    📦 تم توزيع <b>${dist.distributedCount}</b> فاتورة تلقائياً على <b>${dist.distributedReps.length}</b> من المناديب المسجَّلين بالفعل في لوحة السيارات - كل مندوب حصل على فواتيره هو فقط.<br>
-                    ${dist.pendingCount > 0 ? `⏳ <b>${dist.pendingCount}</b> فاتورة لمناديب غير مسجَّلين بعد كسيارات - اتحفظت في مخزن الانتظار وهتتلحق بأصحابها تلقائياً فور تسجيلهم.` : ''}
-                </div>
-                ${repsRows ? `
-                <div style="max-height:300px;overflow-y:auto;border:1px solid #e2e5f0;border-radius:10px;">
-                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                        <thead style="position:sticky;top:0;background:#f1f3f9;">
-                            <tr><th style="padding:6px 10px;text-align:right;">المندوب</th><th style="padding:6px 10px;">الكود</th><th style="padding:6px 10px;">عدد الفواتير الموزَّعة</th></tr>
-                        </thead>
-                        <tbody>${repsRows}</tbody>
-                    </table>
-                </div>` : ''}
-                ${parseErrors.length > 0 ? `<div style="margin-top:10px;font-size:12px;color:#c92a2a;">${parseErrors.join('<br>')}</div>` : ''}
-            `;
-            hideProgressOverlay();
         }
 
         function showSwapSuspicionReport() {
@@ -32359,11 +31564,22 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             applyInvoicesComparisonFilter();
             showToast('تم إلغاء فلاتر جدول مقارنة الفواتير', 'info');
         });
-        document.getElementById('invoicesSearchInput').addEventListener('input', applyInvoicesComparisonFilter);
+        // ===== [إصلاح أداء] تأخير بسيط (debounce) لحقول الكتابة الحرة (بحث/نطاق بالمتر) بدل إعادة حساب
+        // ومطابقة كل الفواتير مع كل العملاء من جديد مع كل حرف يكتبه المستخدم - فقط تُنفَّذ الفلترة الفعلية
+        // بعد توقف الكتابة لحظة قصيرة (250 مللي ثانية)، لتفادي أي تهنيج/تجمد أثناء الكتابة في شيوت كبيرة =====
+        function debounce(fn, waitMs) {
+            let t = null;
+            return function(...args) {
+                clearTimeout(t);
+                t = setTimeout(() => fn.apply(this, args), waitMs);
+            };
+        }
+        const debouncedApplyInvoicesComparisonFilter = debounce(applyInvoicesComparisonFilter, 250);
+        document.getElementById('invoicesSearchInput').addEventListener('input', debouncedApplyInvoicesComparisonFilter);
         document.getElementById('invoicesStatusFilter').addEventListener('change', applyInvoicesComparisonFilter);
         document.getElementById('invoicesBoundaryFilter').addEventListener('change', applyInvoicesComparisonFilter);
-        document.getElementById('invoicesRangeMin').addEventListener('input', applyInvoicesComparisonFilter);
-        document.getElementById('invoicesRangeMax').addEventListener('input', applyInvoicesComparisonFilter);
+        document.getElementById('invoicesRangeMin').addEventListener('input', debouncedApplyInvoicesComparisonFilter);
+        document.getElementById('invoicesRangeMax').addEventListener('input', debouncedApplyInvoicesComparisonFilter);
 
         if (document.getElementById('clientsFilter')) document.getElementById('clientsFilter').addEventListener('change', applyClientsFilter);
 
