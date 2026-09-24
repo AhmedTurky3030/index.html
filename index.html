@@ -46,6 +46,19 @@
         const overlay = document.getElementById("__auth_overlay__");
         if (overlay) overlay.remove();
       }
+      // ===== واجهات مساعدة للنشر السحابي (المدير/المشرف): تُستخدم من موديول المزامنة (cloudSyncModule) أسفل الصفحة =====
+      window.__authRemoveOverlay = removeOverlay;
+      window.__authShowOverlay = (html) => { getOverlay().innerHTML = html; };
+      const __cloudLoadingCardHtml = `
+        <div id="__cloud_load_card__" style="max-width:380px;margin:110px auto;font-family:'Cairo',Arial,sans-serif;text-align:center;padding:34px 28px;background:#fff;border-radius:18px;box-shadow:0 10px 35px rgba(102,126,234,0.18);border:1px solid #edeef7;">
+          <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:26px;">☁️</div>
+          <h2 id="__cloud_load_title__" style="margin:0 0 6px;color:#2d2d3a;font-weight:800;font-size:18px;">جاري تجهيز بياناتك</h2>
+          <p id="__cloud_load_text__" style="margin:0 0 16px;color:#8a8aa3;font-size:13px;min-height:18px;">يتم جلب آخر تحديث خاص بنطاقك...</p>
+          <div style="height:8px;background:#f0f0f7;border-radius:8px;overflow:hidden;"><div id="__cloud_load_bar__" style="height:100%;width:6%;background:linear-gradient(135deg,#667eea,#764ba2);transition:width .25s;"></div></div>
+        </div>`;
+      function __notifyDenied(user) {
+        try { window.dispatchEvent(new CustomEvent("cloud-user-denied", { detail: { uid: user && user.uid } })); } catch (e) { /* تجاهل */ }
+      }
       // ===== وضع "قراءة فقط" مُصدَّر: لو الصفحة دي ملف HTML مُحمَّل (فيه __EMBEDDED_SHARE_DATA__ مُضمَّن
       // مسبقاً) أو رابط مشاركة ذاتي الاكتفاء (#d=...)، فالبيانات already موجودة جوه الصفحة/الرابط نفسه ولا
       // معنى إطلاقاً لتسجيل دخول Firebase هنا؛ الشخص المُستلم للملف/الرابط مفروض يشوف النتائج فوراً بدون أي
@@ -194,6 +207,7 @@
                   const deviceBlocked = await isDeviceBlocked(user, deviceId);
                   if (deviceBlocked) {
                     await signOut(auth);
+                    __notifyDenied(user);
                     const overlay = getOverlay();
                     overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تم حظر هذا الجهاز تحديدًا من الوصول لهذا الحساب، حتى لو باقي أجهزتك مسموح لها. تواصل مع مسؤول النظام.</h2>";
                     return;
@@ -201,6 +215,7 @@
                   const allowedDevice = await checkDeviceLimit(user, deviceId, userData.maxDevices);
                   if (!allowedDevice) {
                     await signOut(auth);
+                    __notifyDenied(user);
                     const overlay = getOverlay();
                     overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>تجاوزت عدد الأجهزة المسموح بها لهذا الحساب (" + userData.maxDevices + " جهاز). تواصل مع مسؤول النظام.</h2>";
                     return;
@@ -208,7 +223,17 @@
                   // مسموح → نمسح الـ overlay بس، والمحتوى الأصلي أصلاً كان ظاهر وبيتحمّل تحته طول الوقت
                   logLoginEvent(user, deviceId);
                   startHeartbeat(user, deviceId);
-                  removeOverlay();
+                  // ===== المدير/المشرف = "وضع العرض من السحابة": بنسيب الشاشة مغطاة لحد ما يتحمّل نطاقه فقط (موديول
+                  // المزامنة هو اللي بيشيل الغطاء بعد التحميل)، وبنقفل أي حفظ محلي لبياناته على الجهاز. باقي المستخدمين
+                  // (أدمن / مسؤول تحديث / مستخدم عادي) بيشتغلوا زي ما كانوا بالظبط =====
+                  const __isViewer = userData.isAdmin !== true && (userData.role === "manager" || userData.role === "supervisor");
+                  window.__cloudViewerMode = __isViewer;
+                  if (__isViewer) {
+                    window.__cloudLoadingHtml = __cloudLoadingCardHtml;
+                    getOverlay().innerHTML = __cloudLoadingCardHtml;
+                  } else {
+                    removeOverlay();
+                  }
                   // نحمّل التخزين المحلي (السيارات وباقي البيانات) الخاص بهذا الحساب تحديداً الآن، بعد ما
                   // عرفنا هويته (uid)، عشان بياناته تفضل معزولة تماماً عن أي حساب تاني استُخدم على نفس الجهاز
                   if (typeof window.initUserScopedStorage === 'function') window.initUserScopedStorage(user.uid);
@@ -216,7 +241,11 @@
                   if (userData.isAdmin === true) {
                     addAdminButton();
                   }
+                  // إبلاغ موديول المزامنة السحابية إن المستخدم دخل (لتحميل نطاقه أو إظهار زر النشر)
+                  window.__cloudUser = { user, userData, isViewer: __isViewer };
+                  window.dispatchEvent(new CustomEvent("cloud-user-ready", { detail: window.__cloudUser }));
                 } else {
+                  __notifyDenied(user);
                   const overlay = getOverlay();
                   overlay.innerHTML = "<h2 style='text-align:center;margin-top:100px;color:red;'>ليس لديك صلاحية لعرض هذا المحتوى</h2>";
                 }
@@ -371,6 +400,11 @@
         __currentUserRole = userData.role || "user";
         __currentUserIsAdmin = !!userData.isAdmin;
         __currentUserPerms = normalizePermissions(userData.permissions);
+        // المدير/المشرف بيشتغل على بيانات منشورة من السحابة (عرض فقط): إضافة سيارة واستيراد نسخة مقفولين دايماً
+        if (!__currentUserIsAdmin && (__currentUserRole === "manager" || __currentUserRole === "supervisor")) {
+          __currentUserPerms.addCar = false;
+          __currentUserPerms.importVersion = false;
+        }
         if (__currentUserIsAdmin) { refreshFeatureButtonsVisibility(); return; }
         wrapFeatureFunctionsOnce();
         refreshFeatureButtonsVisibility();
@@ -544,7 +578,9 @@
               maxDevices: u.maxDevices || null,
               lastActiveMs,
               online: lastActiveMs > 0 && (Date.now() - lastActiveMs) < ONLINE_THRESHOLD_MS,
-              permissions: normalizePermissions(u.permissions)
+              permissions: normalizePermissions(u.permissions),
+              role: u.role || "user",
+              scope: u.scope || {}
             });
           }
           __adminUsersCache = users;
@@ -948,6 +984,10 @@
               renderLoginChart(parseInt(btn.dataset.range, 10));
             };
           });
+          // ---- تبويبات النشر السحابي (نطاق البيانات + النشرات) - معرّفة في موديول cloudSyncModule ----
+          if (typeof window.__cloudAdminHook === "function") {
+            try { window.__cloudAdminHook({ modal, users: __adminUsersCache }); } catch (hookErr) { console.error("cloud admin hook error:", hookErr); }
+          }
         } catch (e) {
           console.error("openAdminPanel error:", e);
           content.className = "";
@@ -20561,6 +20601,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         }
 
         function dbPutVehicle(vehicle) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             if (fleetDB) {
                 try {
                     const tx = fleetDB.transaction(VEHICLES_STORE, 'readwrite');
@@ -20582,6 +20623,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // فتح معاملة وقراءة/كتابة localStorage لكل مندوب كان يضاعف استهلاك الذاكرة ويضغط
         // على IndexedDB بلا داعٍ.
         function dbPutVehiclesBatch(vehicles) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             if (!vehicles || vehicles.length === 0) return;
             if (fleetDB) {
                 try {
@@ -20603,6 +20645,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         }
 
         function dbDeleteVehicleRecord(id) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             // ===== نحذف دايماً من الـ localStorage (لو موجودة نسخة قديمة فيها) حتى لو IndexedDB هي المصدر
             // النشط حالياً، لضمان عدم بقاء أي نسخة "كاش" قديمة للبيانات المحذوفة ممكن ترجع تظهر لاحقاً =====
             try {
@@ -20649,6 +20692,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // مؤقتاً بانتظار تسجيل صاحبها كسيارة مستقلة، وتُسحَب تلقائياً وتُلحَق ببياناته فور حفظه لأول مرة بنفس
         // الكود - فلا تختفي الفاتورة ولا تختلط ببيانات مندوب آخر خطأً =====
         function dbSavePendingInvoices(map) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             if (fleetDB) {
                 try {
                     const tx = fleetDB.transaction(META_STORE, 'readwrite');
@@ -20693,6 +20737,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         // ملحوظة: بيتحفظ الناتج المُحسوب نفسه بس (مش ملفات الـ KML الخام)، فلو حبيت تضيف مناطق/عملاء جدد لاحقاً
         // هتحتاج ترفع ملف الحدود العامة تاني كالمعتاد - الفرق إن أي نتيجة سابقة متعرضتش للضياع بمجرد تحديث الصفحة =====
         function dbSaveBoundaryDrawState(state) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             if (fleetDB) {
                 try {
                     const tx = fleetDB.transaction(META_STORE, 'readwrite');
@@ -20802,6 +20847,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         }
 
         function dbSaveSupervisorsRegistry(names) {
+            if (window.__cloudViewerMode) return; // المدير/المشرف: لا حفظ محلي (البيانات من السحابة فقط)
             if (fleetDB) {
                 try {
                     const tx = fleetDB.transaction(META_STORE, 'readwrite');
@@ -21121,8 +21167,13 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const wasOpen = overlay && overlay.classList.contains('open');
             if (wasOpen) overlay.classList.remove('open');
 
+            // عناصر واجهة النشر السحابي (زر النشر / شريط التحديث ...) مالهاش لازمة في الملفات المُصدَّرة
+            const cloudEls = Array.from(document.querySelectorAll('[data-cloud-ui]')).map(el => ({ el, parent: el.parentNode, next: el.nextSibling }));
+            cloudEls.forEach(x => x.parent && x.parent.removeChild(x.el));
+
             let html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
 
+            cloudEls.forEach(x => { if (x.parent) x.parent.insertBefore(x.el, x.next); });
             if (wasOpen) overlay.classList.add('open');
 
             // شبكة أمان: حتى لو حصل أي تعارض توقيت غير متوقع، نتأكد إن الطبقة تظهر "مقفولة" في الملف المُصدَّر
@@ -21403,6 +21454,8 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
                 } else {
                     showToast(parsedFiles.length === 1 ? '✅ تم استيراد النسخة الاحتياطية بنجاح' : `✅ تم استيراد ${parsedFiles.length} نسخة احتياطية بنجاح`, 'success');
                 }
+                // إبلاغ موديول النشر السحابي (لو المستخدم أدمن/مسؤول تحديث بيظهر له سؤال "نشر الآن؟")
+                try { window.dispatchEvent(new CustomEvent('fleet-import-done', { detail: { vehiclesCount: totalVehiclesCount, filesCount: parsedFiles.length } })); } catch (e) { /* تجاهل */ }
             } catch (err) {
                 hideProgressOverlay();
                 console.error('خطأ في الاستيراد:', err);
@@ -33143,7 +33196,7 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
             const isEmbeddedReportFile = (typeof window.__EMBEDDED_SHARE_DATA__ !== 'undefined' && window.__EMBEDDED_SHARE_DATA__)
                 || (window.location.hash && window.location.hash.startsWith('#d='));
             if (!isEmbeddedReportFile) {
-                initFleetStorage();
+                window.__fleetStorageReady = initFleetStorage();
             }
             
             const hasSharedData = await loadSharedData();
@@ -33210,6 +33263,890 @@ button[onclick="showSystemCopyScreen()"],#systemCopyScreen,
         const scriptXLSX = document.createElement('script');
         scriptXLSX.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
         document.head.appendChild(scriptXLSX);
+
+        // =====================================================================================
+        // ===== جسر المزامنة السحابية: يسمح لموديول cloudSyncModule (الأسفل) بالوصول للدوال والبيانات
+        // الداخلية بشكل صريح ومحدود بدل الاعتماد على متغيرات عامة =====
+        // =====================================================================================
+        if (!window.__fleetStorageReady) window.__fleetStorageReady = Promise.resolve();
+        window.__fleetBridge = {
+            getVehicles: () => Object.values(vehiclesStore),
+            vehiclesCount: () => Object.keys(vehiclesStore).length,
+            serializeVehicle: (v) => serializeVehicleForExport(v),
+            importPayload: (payload, opts) => importVehiclesData(payload, opts),
+            render: () => renderVehiclesDashboard(),
+            hideProgress: () => hideProgressOverlay(),
+            toast: (m, t) => showToast(m, t),
+            confirm: (m) => { const el = document.getElementById('ccMsg'); if (el) el.style.whiteSpace = 'pre-line'; return customConfirm(m); },
+            // أقدم وأحدث يوم في البيانات المحلية (YYYY-MM-DD) - لعرض "فترة البيانات" وللتحذير قبل النشر
+            getPeriod: () => {
+                let from = null, to = null;
+                Object.values(vehiclesStore).forEach(v => {
+                    Object.values(v.allDaysData || {}).forEach(d => {
+                        const k = d.dateKey || (d.startTime ? dateKeyFromDate(d.startTime) : null);
+                        if (!k) return;
+                        if (!from || k < from) from = k;
+                        if (!to || k > to) to = k;
+                    });
+                });
+                return { from, to };
+            },
+            // يمسح أي بيانات محلية اتحمّلت في الذاكرة قبل تسجيل الدخول (من مستخدم سابق على نفس الجهاز) قبل عرض نطاق المدير/المشرف
+            resetForViewer: () => {
+                Object.keys(vehiclesStore).forEach(k => { delete vehiclesStore[k]; });
+                vehicleCounter = 0;
+                currentVehicleId = null;
+                supervisorsRegistry.length = 0;
+                pendingInvoicesByRepCode = {};
+                boundaryDrawRegions = {};
+                boundaryDrawRegionOrder = [];
+                dashboardFilteredVehicleIds = null;
+                activeSupervisorFilters.clear();
+                activeDriverFilters.clear();
+                ['boundaryDrawDownloadBtn', 'boundaryDrawShuffleBtn', 'boundaryDrawSalesExcelBtn', 'boundaryDrawDataExcelBtn'].forEach(id => {
+                    const el = document.getElementById(id); if (el) el.style.display = 'none';
+                });
+                const bs = document.getElementById('boundaryDrawSummary'); if (bs) bs.innerHTML = '';
+            }
+        };
+    </script>
+
+    <!-- ===== موديول النشر والمزامنة السحابية (cloudSyncModule) ===== -->
+    <script type="module" id="cloudSyncModule">
+      // =====================================================================================
+      //  طبقة النشر والمزامنة السحابية (Cloud Sync)
+      //  - مسؤول التحديث / الأدمن: بينشر البيانات المحلية كنسخة (Snapshot) مقسّمة حسب (قطاع ← مشرف)
+      //  - المدير / المشرف: بيحمّل من آخر نسخة منشورة "نطاقه فقط" (والسيرفر هو اللي بيفرض ده عبر Firestore Rules)
+      //  - الأدمن: تبويبان جديدان في لوحة المراقبة (نطاق البيانات + النشرات)
+      //  التخزين كله داخل Firestore (مضغوط gzip ومقسّم لقطع < 1MB) فمفيش أي إعداد إضافي (Storage / CORS)
+      //  الهيكل:
+      //    meta/latest                                   ← مؤشر آخر نسخة منشورة
+      //    snapshots/{v}                                 ← فهرس النسخة (كل القطاعات/المجموعات) - للأدمن والمحدّث فقط
+      //    snapshots/{v}/sectors/{sectorKey}             ← فهرس القطاع (المدير يقرأ قطاعه فقط)
+      //    snapshots/{v}/groups/{sectorKey__supKey}      ← بيانات تعريف المجموعة
+      //    snapshots/{v}/groups/{id}/chunks/{00000..}    ← قطع البيانات المضغوطة
+      // =====================================================================================
+      import { getApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+      import { getAuth } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
+      import { getFirestore, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, collection, query, orderBy, limit, onSnapshot, serverTimestamp, Bytes } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+
+      const app = getApp();
+      const auth = getAuth(app);
+      const db = getFirestore(app);
+
+      const UNSPEC = "غير محدد";
+      const CHUNK_BYTES = 700000;      // أقل بكثير من حد مستند Firestore (1MiB)
+      const BATCH_CHUNKS = 6;          // عدد القطع في كل عملية كتابة (حد الـ commit الواحد 10MiB)
+      const KEEP_VERSIONS = 3;         // عدد النسخ المحتفظ بها (الأقدم بيتحذف تلقائياً بعد كل نشر)
+      const NET_TIMEOUT_MS = 120000;   // لو عملية رفع واحدة خدت أكتر من كده (انقطاع نت) نوقف النشر برسالة واضحة بدل ما يفضل معلّق
+      const STALE_UPLOAD_MS = 2 * 3600 * 1000;   // نشرة "قيد الرفع" أقدم من ساعتين = نشرة انقطعت (قفل تبويب / انقطاع كهرباء) وتتمسح
+      const VIEWER_ROLES = ["manager", "supervisor"];
+      const ROLE_LABELS = {
+        user: "مستخدم عادي (يعمل محلياً)",
+        manager: "مدير (يرى قطاعه)",
+        supervisor: "مشرف (يرى مجموعته)",
+        updater: "مسؤول تحديث (ينشر البيانات)"
+      };
+
+      // ---------------- أدوات عامة ----------------
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const tick = () => new Promise((r) => setTimeout(r, 0));   // setTimeout بدل rAF: rAF بيتوقف لو التبويب في الخلفية
+      const fmtBytes = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+      const fmtDate = (ms) => ms ? new Date(ms).toLocaleString("ar-EG") : "-";
+      const tsMs = (ts) => ts && ts.toMillis ? ts.toMillis() : (ts && ts.toDate ? ts.toDate().getTime() : 0);
+      const bridge = () => { const b = window.__fleetBridge; if (!b) throw new Error("التطبيق لم يكتمل تحميله بعد"); return b; };
+      const toast = (m, t) => { try { window.__fleetBridge.toast(m, t || "info"); } catch (e) { console.log(m); } };
+      const isViewerRole = (r) => VIEWER_ROLES.includes(r);
+      function withTimeout(promise, ms, msg) {
+        let t;
+        return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(msg)), ms); })]).finally(() => clearTimeout(t));
+      }
+      const NET_MSG = "انقطع الاتصال أثناء الرفع - تحقق من الإنترنت وأعد النشر";
+      // "2026-09-21" ← "21/9" (والسنة مع آخر يوم)
+      const fmtDay = (k, withYear) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(k || ""); return m ? `${+m[3]}/${+m[2]}${withYear ? "/" + m[1] : ""}` : ""; };
+      const fmtPeriod = (a, b) => (a && b) ? `${fmtDay(a)} → ${fmtDay(b, true)}` : "";
+      const isOfflineErr = (e) => !!e && (e.code === "unavailable" || /offline|network/i.test(String(e.message || "")));
+
+      // تطبيع الأسماء (أ/إ/آ → ا، ى → ي، ة → ه، حذف التشكيل والمسافات الزائدة) عشان اختلاف الكتابة ما يعملش مجموعة جديدة
+      function normName(s) {
+        return String(s == null ? "" : s).trim()
+          .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+          .replace(/[أإآٱ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+          .replace(/\s+/g, " ").toLowerCase();
+      }
+      function cyrb53(str, seed = 0) {
+        let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+        for (let i = 0, ch; i < str.length; i++) {
+          ch = str.charCodeAt(i);
+          h1 = Math.imul(h1 ^ ch, 2654435761);
+          h2 = Math.imul(h2 ^ ch, 1597334677);
+        }
+        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+        return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+      }
+      // مفتاح ثابت وآمن للاستخدام كـ document id (حروف/أرقام فقط، بدون "__" أو ".")
+      const keyOf = (prefix, name) => prefix + cyrb53(normName(name)).toString(36);
+
+      function normScope(s) {
+        const o = s && typeof s === "object" ? s : {};
+        const arr = (x) => Array.isArray(x) ? x.filter((v) => typeof v === "string") : [];
+        return { sectors: arr(o.sectors), groups: arr(o.groups) };
+      }
+      const scopeSig = (sc) => JSON.stringify([[...sc.sectors].sort(), [...sc.groups].sort()]);
+
+      async function mapLimit(items, n, fn) {
+        const out = new Array(items.length);
+        let next = 0;
+        async function worker() { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } }
+        await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+        return out;
+      }
+
+      // ---------------- ضغط / فك ضغط ----------------
+      async function gzipBlob(blob) {
+        if (typeof CompressionStream === "undefined") return { u8: new Uint8Array(await blob.arrayBuffer()), enc: "raw" };
+        const buf = await new Response(blob.stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+        return { u8: new Uint8Array(buf), enc: "gzip" };
+      }
+      async function gunzipText(u8, enc) {
+        if (enc !== "gzip") return new TextDecoder().decode(u8);
+        if (typeof DecompressionStream === "undefined") throw new Error("المتصفح لا يدعم فك الضغط - حدّث المتصفح");
+        return await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+      }
+
+      // ---------------- تنسيقات الواجهة (متوافقة مع تصميم لوحة المراقبة الحالية) ----------------
+      function ensureStyles() {
+        if ($("__cloud_styles__")) return;
+        const st = document.createElement("style");
+        st.id = "__cloud_styles__";
+        st.setAttribute("data-cloud-ui", "1");
+        st.textContent = `
+          .cl-backdrop{position:fixed;inset:0;background:rgba(20,20,35,.55);z-index:1000001;display:flex;align-items:center;justify-content:center;padding:20px;direction:rtl;font-family:'Cairo',Arial,sans-serif;box-sizing:border-box}
+          .cl-backdrop *{box-sizing:border-box;font-family:'Cairo',Arial,sans-serif}
+          .cl-card{background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+          .cl-head{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:18px 22px;display:flex;justify-content:space-between;align-items:center}
+          .cl-head h3{margin:0;font-size:17px;font-weight:800}
+          .cl-x{background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:15px}
+          .cl-body{padding:20px 22px;color:#2d2d3a;font-size:14px}
+          .cl-kv{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #f2f2f7;font-size:13px}
+          .cl-kv span:first-child{color:#8a8aa3}
+          .cl-btn{display:block;width:100%;padding:12px 14px;border-radius:10px;border:1.5px solid #e3e3ef;background:#fff;color:#4c4ce0;font-weight:700;font-size:14px;cursor:pointer;margin-top:10px}
+          .cl-btn.primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border-color:transparent}
+          .cl-btn:disabled{opacity:.6;cursor:wait}
+          .cl-note{font-size:12px;color:#8a8aa3;margin:10px 0 0;line-height:1.7}
+          .cl-bar{height:8px;background:#f0f0f7;border-radius:8px;overflow:hidden;margin:14px 0 8px}
+          .cl-bar>i{display:block;height:100%;width:0;background:linear-gradient(135deg,#667eea,#764ba2);transition:width .25s}
+          .cl-fab{position:fixed;left:22px;z-index:999998;padding:13px 20px;background:linear-gradient(135deg,#43b581,#2b8a6e);color:#fff;border:none;border-radius:30px;box-shadow:0 6px 18px rgba(43,138,110,.4);cursor:pointer;font-size:14px;font-weight:700;font-family:'Cairo',Arial,sans-serif}
+          .cl-chip{position:fixed;left:22px;bottom:22px;z-index:999998;padding:9px 16px;background:#fff;color:#4c4ce0;border:1.5px solid #e3e3ef;border-radius:30px;box-shadow:0 4px 14px rgba(0,0,0,.12);cursor:pointer;font-size:12.5px;font-weight:700;font-family:'Cairo',Arial,sans-serif;direction:rtl}
+          .cl-chip.warn{color:#c2650a;border-color:#fed7aa;background:#fff7ed}
+          .cl-banner{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:1000000;background:#fff;border:1.5px solid #c9c9f5;border-radius:14px;box-shadow:0 10px 30px rgba(76,76,224,.25);padding:12px 16px;display:flex;gap:12px;align-items:center;direction:rtl;font-family:'Cairo',Arial,sans-serif;font-size:13.5px;color:#2d2d3a;max-width:94vw}
+          .cl-banner button{border:none;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px}
+          .cl-banner .go{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
+          .cl-banner .later{background:#f0f0f7;color:#5a5a72}
+          .cl-chk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+          .cl-chk{display:flex;align-items:center;gap:6px;font-size:12.5px;background:#fff;border:1px solid #edeef7;border-radius:8px;padding:7px 10px;cursor:pointer}
+          .cl-chk small{color:#8a8aa3}
+          .cl-edit{padding:14px;background:#fbfbfe;border-radius:10px}
+          .cl-edit h4{margin:12px 0 8px;font-size:13px;color:#4c4ce0}
+          .cl-edit h4:first-child{margin-top:0}
+          .cl-sec{margin-bottom:10px}
+          .cl-sec>b{display:block;font-size:12px;color:#5a5a72;margin:8px 0 6px}
+          .cl-save{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-weight:700;cursor:pointer;font-size:13px;font-family:inherit;margin-top:12px}
+          .cl-save:disabled{opacity:.6;cursor:wait}
+          .cl-mini{border:1px solid #e3e3ef;background:#fff;color:#5a5a72;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;margin-inline-start:4px}
+          .cl-mini.danger{color:#e5484d;border-color:#f5b5b5}
+          .cl-mini:disabled{opacity:.6;cursor:wait}
+          .cl-pubbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:#f7f7fc;border:1px solid #edeef7;border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:13px}
+          .cl-pubbar b{color:#4c4ce0}
+          .cl-empty-note{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:14px 16px;font-size:13px;line-height:1.8}
+        `;
+        document.head.appendChild(st);
+      }
+      ensureStyles();
+
+      // شريط تقدّم: يكتب في شاشة التحميل الأولية (لو موجودة) وإلا في نافذة مستقلة
+      function startProgress(title) {
+        if ($("__cloud_load_card__")) {
+          const t = $("__cloud_load_title__"); if (t) t.textContent = title;
+          return {
+            set(pct, text) {
+              const bar = $("__cloud_load_bar__"); if (bar && pct != null) bar.style.width = Math.max(4, Math.min(100, pct)) + "%";
+              const d = $("__cloud_load_text__"); if (d && text != null) d.textContent = text;
+            },
+            done() {}
+          };
+        }
+        const wrap = document.createElement("div");
+        wrap.id = "__cloud_busy__";
+        wrap.className = "cl-backdrop";
+        wrap.setAttribute("data-cloud-ui", "1");
+        wrap.innerHTML = `<div class="cl-card"><div class="cl-head"><h3>${esc(title)}</h3></div><div class="cl-body"><div class="cl-bar"><i id="__cb_fill__"></i></div><p class="cl-note" id="__cb_text__" style="margin:0;">...</p></div></div>`;
+        document.body.appendChild(wrap);
+        return {
+          set(pct, text) {
+            const f = $("__cb_fill__"); if (f && pct != null) f.style.width = Math.max(0, Math.min(100, pct)) + "%";
+            const d = $("__cb_text__"); if (d && text != null) d.textContent = text;
+          },
+          done() { wrap.remove(); }
+        };
+      }
+
+      // ---------------- كاش محلي للمدير/المشرف (IndexedDB): آخر نسخة نزلت لهذا الحساب على هذا الجهاز ----------------
+      function idb() {
+        return new Promise((res, rej) => {
+          if (!window.indexedDB) return rej(new Error("no indexedDB"));
+          const r = indexedDB.open("fleetCloudCache", 1);
+          r.onupgradeneeded = () => r.result.createObjectStore("entries", { keyPath: "uid" });
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        });
+      }
+      async function cacheGet(uid) {
+        try {
+          const d = await idb();
+          return await new Promise((res) => { const q = d.transaction("entries").objectStore("entries").get(uid); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+        } catch (e) { return null; }
+      }
+      async function cacheSet(entry) {
+        const d = await idb();
+        return new Promise((res, rej) => { const tx = d.transaction("entries", "readwrite"); tx.objectStore("entries").put(entry); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+      }
+      async function cacheClear(uid) {
+        try {
+          const d = await idb();
+          await new Promise((res) => { const tx = d.transaction("entries", "readwrite"); if (uid) tx.objectStore("entries").delete(uid); else tx.objectStore("entries").clear(); tx.oncomplete = () => res(); tx.onerror = () => res(); });
+        } catch (e) { /* تجاهل */ }
+      }
+
+      // ---------------- قراءة مجموعة كاملة من Firestore (تجميع القطع وفك التغليف) ----------------
+      async function fetchGroup(versionId, id, meta) {
+        const cs = await getDocs(collection(db, "snapshots", versionId, "groups", id, "chunks"));
+        const parts = cs.docs.map((d) => d.data()).sort((a, b) => a.i - b.i);
+        if (parts.length !== meta.chunks) throw new Error("بيانات المجموعة غير مكتملة، حاول مرة أخرى");
+        const u8 = new Uint8Array(meta.bytes);
+        let off = 0;
+        for (const p of parts) { const b = p.b.toUint8Array(); u8.set(b, off); off += b.length; }
+        if (off !== meta.bytes) throw new Error("حجم بيانات المجموعة غير مطابق، حاول مرة أخرى");
+        return { id, supName: meta.supName, sectorName: meta.sectorName, count: meta.count, enc: meta.enc || "gzip", bytes: u8 };
+      }
+      // المدير: قطاعاته (كل المجموعات اللي جواها) + المشرف: مجموعاته المحددة
+      async function fetchScopedGroups(versionId, scope, onProgress) {
+        const ids = new Set(scope.groups);
+        for (const sk of scope.sectors) {
+          const s = await getDoc(doc(db, "snapshots", versionId, "sectors", sk));
+          if (s.exists()) (s.data().groups || []).forEach((g) => ids.add(g.id));
+        }
+        const list = [...ids];
+        let done = 0;
+        const res = await mapLimit(list, 3, async (id) => {
+          const g = await getDoc(doc(db, "snapshots", versionId, "groups", id));
+          if (!g.exists()) return null;
+          const out = await fetchGroup(versionId, id, g.data());
+          done++; onProgress(done / list.length, `تم تحميل ${done} من ${list.length} مجموعة`);
+          return out;
+        });
+        return res.filter(Boolean);
+      }
+
+      // =====================================================================================
+      //  1) النشر (أدمن / مسؤول التحديث)
+      // =====================================================================================
+      async function publish(opts) {
+        opts = opts || {};
+        const B = bridge();
+        const vehicles = B.getVehicles();
+        if (!vehicles.length) { toast("⚠️ لا توجد بيانات محلية لنشرها - حمّل بياناتك أولاً", "error"); return false; }
+
+        // تقسيم السيارات حسب (قطاع ← مشرف)
+        const groups = new Map();
+        vehicles.forEach((v) => {
+          const sName = String(v.sectorName || "").trim() || UNSPEC;
+          const pName = String(v.supervisorName || "").trim() || UNSPEC;
+          const sk = keyOf("s", sName), pk = keyOf("p", pName), id = sk + "__" + pk;
+          if (!groups.has(id)) groups.set(id, { id, sectorKey: sk, supKey: pk, sectorName: sName, supName: pName, vehicles: [] });
+          groups.get(id).vehicles.push(v);
+        });
+        const list = [...groups.values()];
+
+        // النشر عادي: بيعتمد النسخة اللي على جهازك أياً كان تاريخها (شهر أو أكتر أو أقل) من غير أي مقارنة أو منع
+        const period = B.getPeriod();
+        const imp = opts.afterImport || null;
+        let msg = (imp ? `☁️ تم استيراد ${imp.filesCount > 1 ? imp.filesCount + " ملفات" : "الملف"} (${imp.vehiclesCount} سيارة) على جهازك. هل تريد نشره الآن للمديرين والمشرفين؟\n\n` : "")
+          + `سيتم نشر ${vehicles.length} سيارة ضمن ${list.length} مجموعة` + (period.from ? ` (الفترة ${fmtPeriod(period.from, period.to)})` : "") + " كنسخة جديدة تحل محل الحالية لدى كل المديرين والمشرفين.";
+        if (imp && vehicles.length > imp.vehiclesCount) msg += `\n\nℹ️ جهازك فيه ${vehicles.length - imp.vehiclesCount} سيارة زيادة عن الملف المستورد (قديمة أو من ملفات تانية) وكلها هتتنشر.`;
+        const ok = await B.confirm(msg + (imp ? "" : "\n\nمتابعة؟"));
+        if (!ok) { if (imp) toast("تم الاستيراد على جهازك فقط — تقدر تنشره في أي وقت من زر «📤 نشر التحديث»", "info"); return false; }
+
+        // معرّف فريد لكل نشر (تاريخ + ملّي ثانية + رمز عشوائي) عشان نشرتين في نفس اللحظة عمرهم ما يكتبوا فوق بعض
+        const versionId = "v" + new Date().toISOString().replace(/\D/g, "").slice(0, 17) + Math.random().toString(36).slice(2, 6);
+        const email = (auth.currentUser && auth.currentUser.email) || "";
+        const prog = startProgress("📤 جاري نشر التحديث");
+        const written = [];   // كل ما كُتب في هذه النشرة: لو فشلت في نص الطريق نمسحه (النسخة المعتمدة الحالية ما بتتأثرش أصلاً)
+        try {
+          // علامة "قيد الرفع": لو التبويب اتقفل في نص النشر، النسخة الناقصة دي بتتعرف وتتمسح تلقائياً في النشرة الجاية
+          written.push(doc(db, "snapshots", versionId));
+          await withTimeout(setDoc(doc(db, "snapshots", versionId), { versionId, status: "uploading", createdAt: serverTimestamp(), createdBy: email }), NET_TIMEOUT_MS, NET_MSG);
+          const metas = [];
+          let totalBytes = 0;
+          for (let gi = 0; gi < list.length; gi++) {
+            const g = list[gi];
+            const base = (gi / list.length) * 90;
+            const span = 90 / list.length;
+            prog.set(base, `تجهيز مجموعة «${g.supName}» (${gi + 1}/${list.length})`);
+            const parts = ['{"version":"1.0","kind":"group","supervisorsRegistry":' + JSON.stringify(g.supName === UNSPEC ? [] : [g.supName]) + ',"vehicles":['];
+            for (let i = 0; i < g.vehicles.length; i++) {
+              if (i > 0) parts.push(",");
+              parts.push(JSON.stringify(B.serializeVehicle(g.vehicles[i])));
+              if (i % 10 === 9) await tick();
+            }
+            parts.push("]}");
+            const { u8, enc } = await gzipBlob(new Blob(parts));
+            const n = Math.max(1, Math.ceil(u8.length / CHUNK_BYTES));
+            const meta = { id: g.id, sectorKey: g.sectorKey, supKey: g.supKey, sectorName: g.sectorName, supName: g.supName, count: g.vehicles.length, bytes: u8.length, chunks: n, enc };
+            // مستند المجموعة بيتكتب قبل قطعها: أي قطعة موجودة يبقى لها مستند مجموعة، فحذف النسخة بيلاقيها كلها
+            const gref = doc(db, "snapshots", versionId, "groups", g.id);
+            written.push(gref);
+            await withTimeout(setDoc(gref, Object.assign({ createdAt: serverTimestamp() }, meta)), NET_TIMEOUT_MS, NET_MSG);
+            for (let s = 0; s < n; s += BATCH_CHUNKS) {
+              const batch = writeBatch(db);
+              const batchRefs = [];
+              for (let k = s; k < Math.min(n, s + BATCH_CHUNKS); k++) {
+                const ref = doc(db, "snapshots", versionId, "groups", g.id, "chunks", String(k).padStart(5, "0"));
+                batch.set(ref, { i: k, b: Bytes.fromUint8Array(u8.subarray(k * CHUNK_BYTES, (k + 1) * CHUNK_BYTES)) });
+                batchRefs.push(ref);
+              }
+              written.push(...batchRefs);
+              await withTimeout(batch.commit(), NET_TIMEOUT_MS, NET_MSG);
+              prog.set(base + span * Math.min(1, (s + BATCH_CHUNKS) / n), `رفع «${g.supName}» (${fmtBytes(u8.length)})`);
+            }
+            totalBytes += u8.length;
+            metas.push(meta);
+          }
+
+          // بيانات التعريف (مجموعات + قطاعات + فهرس النسخة) ثم تبديل المؤشر في الآخر (ذرّياً)
+          prog.set(92, "جاري كتابة الفهرس...");
+          const bySector = new Map();
+          metas.forEach((m) => {
+            if (!bySector.has(m.sectorKey)) bySector.set(m.sectorKey, { sectorKey: m.sectorKey, sectorName: m.sectorName, count: 0, groups: [] });
+            const s = bySector.get(m.sectorKey);
+            s.count += m.count;
+            s.groups.push({ id: m.id, supKey: m.supKey, supName: m.supName, count: m.count, bytes: m.bytes });
+          });
+          const writes = [];
+          bySector.forEach((s) => writes.push([doc(db, "snapshots", versionId, "sectors", s.sectorKey), s]));
+          for (let i = 0; i < writes.length; i += 400) {
+            const b = writeBatch(db);
+            writes.slice(i, i + 400).forEach(([ref, data]) => { b.set(ref, data); written.push(ref); });
+            await withTimeout(b.commit(), NET_TIMEOUT_MS, NET_MSG);
+          }
+          const summary = { vehicleCount: vehicles.length, groupCount: metas.length, bytes: totalBytes, periodFrom: period.from || null, periodTo: period.to || null };
+          await withTimeout(updateDoc(doc(db, "snapshots", versionId), Object.assign({ status: "ready", sectors: [...bySector.values()] }, summary)), NET_TIMEOUT_MS, NET_MSG);
+          await withTimeout(setDoc(doc(db, "meta", "latest"), Object.assign({ versionId, publishedAt: serverTimestamp(), publishedBy: email }, summary)), NET_TIMEOUT_MS, NET_MSG);
+
+          prog.set(96, "جاري تنظيف النسخ القديمة...");
+          try { await pruneOldVersions(versionId); } catch (e) { console.warn("prune error:", e); }
+          prog.set(100, "تم");
+          prog.done();
+          toast(`✅ تم نشر التحديث (${vehicles.length} سيارة / ${metas.length} مجموعة / ${fmtBytes(totalBytes)})`, "success");
+          return true;
+        } catch (e) {
+          prog.done();
+          console.error("publish error:", e);
+          try { await withTimeout(deleteMany(written), 20000, "cleanup timeout"); } catch (cleanupErr) { console.warn("cleanup error:", cleanupErr); }
+          toast("❌ فشل النشر: " + (e && e.message ? e.message : e) + " — النسخة السابقة ما زالت هي المعتمدة ولم يتأثر أي مستخدم", "error");
+          return false;
+        }
+      }
+
+      async function deleteMany(refs) {
+        for (let i = 0; i < refs.length; i += 400) {
+          const b = writeBatch(db);
+          refs.slice(i, i + 400).forEach((r) => b.delete(r));
+          await b.commit();
+        }
+      }
+      async function deleteVersion(vId) {
+        const gs = await getDocs(collection(db, "snapshots", vId, "groups"));
+        for (const g of gs.docs) {
+          const n = g.data().chunks || 0;   // نعرف عدد القطع من مستند المجموعة، فمن غير قراءة القطع نفسها (توفير في القراءات)
+          const refs = [];
+          for (let k = 0; k < n; k++) refs.push(doc(db, "snapshots", vId, "groups", g.id, "chunks", String(k).padStart(5, "0")));
+          await deleteMany(refs);
+          await deleteDoc(g.ref);
+        }
+        const ss = await getDocs(collection(db, "snapshots", vId, "sectors"));
+        await deleteMany(ss.docs.map((d) => d.ref));
+        await deleteDoc(doc(db, "snapshots", vId));
+      }
+      // بيحتفظ بآخر KEEP_VERSIONS نسخ مكتملة، وبيمسح النشرات المنقطعة ("قيد الرفع" من أكتر من ساعتين)
+      async function pruneOldVersions(currentId) {
+        const snap = await getDocs(query(collection(db, "snapshots"), orderBy("createdAt", "desc")));
+        const all = snap.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+        const ready = all.filter((v) => v.status !== "uploading");
+        const stale = all.filter((v) => v.status === "uploading" && v.id !== currentId && Date.now() - tsMs(v.createdAt) > STALE_UPLOAD_MS);
+        const ids = [...ready.slice(KEEP_VERSIONS), ...stale].map((v) => v.id).filter((id) => id !== currentId);
+        for (const id of ids) await deleteVersion(id);
+      }
+
+      async function loadManifest() {
+        const l = await getDoc(doc(db, "meta", "latest"));
+        if (!l.exists()) return null;
+        const latest = l.data();
+        const m = await getDoc(doc(db, "snapshots", latest.versionId));
+        return { latest, manifest: m.exists() ? m.data() : { sectors: [] } };
+      }
+
+      // تنزيل آخر نسخة منشورة كاملة على هذا الجهاز (لأدمن/مسؤول التحديث) - يدمجها في البيانات المحلية
+      async function pullAllToLocal() {
+        const B = bridge();
+        const l = await getDoc(doc(db, "meta", "latest"));
+        if (!l.exists()) { toast("لا توجد نسخة منشورة بعد", "error"); return; }
+        const v = l.data().versionId;
+        const ok = await B.confirm("سيتم دمج آخر نسخة منشورة في بيانات هذا الجهاز (أي سيارة بنفس المعرّف تُستبدل بنسختها المنشورة). متابعة؟");
+        if (!ok) return;
+        const prog = startProgress("⬇️ جاري تنزيل آخر نسخة منشورة");
+        try {
+          const gs = await getDocs(collection(db, "snapshots", v, "groups"));
+          const metas = gs.docs.map((d) => ({ id: d.id, meta: d.data() }));
+          let done = 0;
+          for (const m of metas) {
+            prog.set((done / metas.length) * 100, `تحميل «${m.meta.supName}» (${done + 1}/${metas.length})`);
+            const g = await fetchGroup(v, m.id, m.meta);
+            const payload = JSON.parse(await gunzipText(g.bytes, g.enc));
+            await B.importPayload(payload, { persist: true, renderDashboard: false });
+            done++;
+            await tick();
+          }
+          try { B.hideProgress(); } catch (e) { /* تجاهل */ }
+          B.render();
+          prog.done();
+          toast(`✅ تم دمج ${metas.length} مجموعة في بيانات هذا الجهاز`, "success");
+        } catch (e) {
+          try { B.hideProgress(); } catch (e2) { /* تجاهل */ }
+          prog.done();
+          console.error("pullAll error:", e);
+          toast("❌ فشل تنزيل النسخة: " + (e && e.message ? e.message : e), "error");
+        }
+      }
+
+      // ===== النشر بعد "استيراد نسخة": الأدمن/مسؤول التحديث بيستورد ملف الـ JSON اليومي زي العادة، وبعد ما الاستيراد
+      // يخلص بيظهر سؤال واحد "نشر الآن؟" (فيه مقارنة بالنسخة الحالية وتحذيرات). ده الإجراء اليدوي الوحيد المطلوب يومياً =====
+      const AUTO_KEY = "cloudPromptPublishAfterImport";
+      const autoPromptOn = () => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch (e) { return true; } };
+      let canPublishHere = false;
+      window.addEventListener("fleet-import-done", (ev) => {
+        if (!canPublishHere || !autoPromptOn()) return;
+        publish({ afterImport: ev.detail || { vehiclesCount: 0, filesCount: 1 } });
+      });
+
+      // مركز النشر (نافذة صغيرة يفتحها الزر العائم)
+      async function openPublishCenter() {
+        if ($("__cloud_center__")) return;
+        const B = bridge();
+        const wrap = document.createElement("div");
+        wrap.id = "__cloud_center__";
+        wrap.className = "cl-backdrop";
+        wrap.setAttribute("data-cloud-ui", "1");
+        wrap.innerHTML = `
+          <div class="cl-card">
+            <div class="cl-head"><h3>☁️ نشر البيانات للمديرين والمشرفين</h3><button class="cl-x" id="__cc_close__">✕</button></div>
+            <div class="cl-body">
+              <div id="__cc_info__" class="cl-note" style="margin:0 0 6px;">جاري قراءة آخر نشر...</div>
+              <div class="cl-kv"><span>بيانات هذا الجهاز</span><b>${B.vehiclesCount()} سيارة</b></div>
+              <button class="cl-btn primary" id="__cc_pub__">📤 نشر البيانات الحالية</button>
+              <button class="cl-btn" id="__cc_pull__">⬇️ تنزيل آخر نسخة منشورة على هذا الجهاز</button>
+              <label class="cl-chk" style="margin-top:12px;"><input type="checkbox" id="__cc_auto__" ${autoPromptOn() ? "checked" : ""}> اسألني عن النشر بعد كل «استيراد نسخة»</label>
+              <p class="cl-note">النشر بيرفع نسخة جديدة مقسّمة حسب القطاع والمشرف. كل مدير/مشرف يشوف نطاقه فقط، والنسخة القديمة تفضل معتمدة لحد ما النشر يخلص بالكامل. تقدر تتحكم في النطاق من لوحة المراقبة ← «نطاق البيانات».</p>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+        const close = () => wrap.remove();
+        $("__cc_close__").onclick = close;
+        wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+        $("__cc_auto__").onchange = (e) => { try { localStorage.setItem(AUTO_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* تجاهل */ } };
+        $("__cc_pub__").onclick = async () => { close(); await publish(); };
+        $("__cc_pull__").onclick = async () => { close(); await pullAllToLocal(); };
+        try {
+          const l = await getDoc(doc(db, "meta", "latest"));
+          const info = $("__cc_info__");
+          if (info) {
+            if (!l.exists()) info.innerHTML = "لم يتم نشر أي نسخة بعد.";
+            else { const d = l.data(); info.innerHTML = `<div class="cl-kv"><span>آخر نشر</span><b>${esc(fmtDate(tsMs(d.publishedAt)))}</b></div><div class="cl-kv"><span>بواسطة</span><b>${esc(d.publishedBy || "-")}</b></div><div class="cl-kv"><span>المحتوى</span><b>${d.vehicleCount || 0} سيارة / ${d.groupCount || 0} مجموعة / ${fmtBytes(d.bytes || 0)}</b></div>${d.periodFrom ? `<div class="cl-kv"><span>فترة البيانات</span><b>${esc(fmtPeriod(d.periodFrom, d.periodTo))}</b></div>` : ""}`; }
+          }
+        } catch (e) { const info = $("__cc_info__"); if (info) info.textContent = "تعذر قراءة آخر نشر: " + (e && e.message ? e.message : e); }
+      }
+
+      function addPublishButton() {
+        if ($("__cloud_fab__")) return;
+        const b = document.createElement("button");
+        b.id = "__cloud_fab__";
+        b.className = "cl-fab";
+        b.setAttribute("data-cloud-ui", "1");
+        b.textContent = "📤 نشر التحديث";
+        b.style.bottom = $("__admin_btn__") ? "78px" : "22px";
+        b.onclick = () => openPublishCenter();
+        document.body.appendChild(b);
+      }
+
+      // =====================================================================================
+      //  2) المدير / المشرف: تحميل نطاقه فقط (من الكاش أو من آخر نسخة) + تنبيه بالتحديثات
+      // =====================================================================================
+      const viewer = { user: null, userData: null, versionId: undefined, unsub: null, busy: false };
+
+      function setChip(text, warn) {
+        let chip = $("__cloud_chip__");
+        if (!chip) {
+          chip = document.createElement("button");
+          chip.id = "__cloud_chip__";
+          chip.className = "cl-chip";
+          chip.setAttribute("data-cloud-ui", "1");
+          chip.title = "اضغط للتحقق من وجود تحديث";
+          chip.onclick = () => viewerLoad({ initial: false });
+          document.body.appendChild(chip);
+        }
+        chip.textContent = text;
+        chip.classList.toggle("warn", !!warn);
+        const st = $("storageStatus");
+        if (st) { st.className = "storage-status ok"; st.textContent = "☁️ " + text; }
+      }
+
+      function showUpdateBanner(d) {
+        if ($("__cloud_banner__")) return;
+        const b = document.createElement("div");
+        b.id = "__cloud_banner__";
+        b.className = "cl-banner";
+        b.setAttribute("data-cloud-ui", "1");
+        b.innerHTML = `<span>🔔 تم نشر تحديث جديد للبيانات${d && d.periodFrom ? " (الفترة " + esc(fmtPeriod(d.periodFrom, d.periodTo)) + ")" : ""}</span><button class="go">تحديث الآن</button><button class="later">لاحقاً</button>`;
+        document.body.appendChild(b);
+        b.querySelector(".go").onclick = () => { b.remove(); viewerLoad({ initial: false }); };
+        b.querySelector(".later").onclick = () => b.remove();
+      }
+
+      function watchLatest() {
+        if (viewer.unsub) { try { viewer.unsub(); } catch (e) { /* تجاهل */ } }
+        viewer.unsub = onSnapshot(doc(db, "meta", "latest"), (snap) => {
+          const d = snap.exists() ? snap.data() : null;
+          const v = d ? d.versionId : null;
+          if (viewer.versionId !== undefined && v !== viewer.versionId && !viewer.busy) showUpdateBanner(d);
+        }, (err) => {
+          if (err && err.code === "permission-denied") lockViewer();
+        });
+      }
+
+      // لو الأدمن قفل صلاحية الحساب وهو مفتوح: نمسح البيانات من الشاشة والكاش فوراً
+      function lockViewer() {
+        try { if (viewer.unsub) viewer.unsub(); } catch (e) { /* تجاهل */ }
+        try { const B = bridge(); B.resetForViewer(); B.render(); } catch (e) { /* تجاهل */ }
+        if (viewer.user) cacheClear(viewer.user.uid);
+        if (window.__authShowOverlay) window.__authShowOverlay("<h2 style='text-align:center;margin-top:100px;color:red;font-family:Cairo,Arial,sans-serif;'>تم إيقاف صلاحية الوصول لهذا الحساب. تواصل مع مسؤول النظام.</h2>");
+      }
+
+      async function viewerLoad(opts) {
+        if (viewer.busy) return;
+        viewer.busy = true;
+        const initial = !!(opts && opts.initial);
+        const user = viewer.user, userData = viewer.userData;
+        const B = bridge();
+        const prog = startProgress(initial ? "جاري تجهيز بياناتك" : "جاري تحديث بياناتك");
+        try {
+          prog.set(8, "جاري التحقق من آخر تحديث...");
+          const scope = normScope(userData.scope);
+          const sig = scopeSig(scope);
+          let latest = null, offline = false;
+          try {
+            const s = await getDoc(doc(db, "meta", "latest"));
+            latest = s.exists() ? s.data() : null;
+          } catch (e) { if (isOfflineErr(e)) offline = true; else throw e; }
+
+          const cached = await cacheGet(user.uid);
+          let entries = [], info = {};
+          if (offline) {
+            if (!cached) throw new Error("لا يوجد اتصال بالإنترنت ولا توجد نسخة محفوظة على هذا الجهاز");
+            entries = cached.groups; info = { versionId: cached.versionId, publishedAtMs: cached.publishedAtMs, period: cached.period || "", offline: true };
+          } else if (!latest) {
+            info = { versionId: null, empty: true };
+            await cacheClear(user.uid);
+          } else {
+            const publishedAtMs = tsMs(latest.publishedAt);
+            const period = fmtPeriod(latest.periodFrom, latest.periodTo);
+            if (cached && cached.versionId === latest.versionId && cached.sig === sig) {
+              entries = cached.groups;
+              prog.set(45, "جاري فتح آخر تحديث محفوظ...");
+            } else {
+              try {
+                entries = await fetchScopedGroups(latest.versionId, scope, (p, t) => prog.set(10 + p * 55, t));
+                await cacheSet({ uid: user.uid, versionId: latest.versionId, sig, publishedAtMs, period, groups: entries }).catch((e) => console.warn("cache error:", e));
+              } catch (e) {
+                if (cached && isOfflineErr(e)) { entries = cached.groups; info.offline = true; toast("⚠️ تعذر جلب التحديث الأخير - يتم عرض آخر نسخة محفوظة", "info"); }
+                else throw e;
+              }
+            }
+            info = Object.assign(info, { versionId: latest.versionId, publishedAtMs, period: (cached && cached.versionId === latest.versionId && cached.period) || period });
+          }
+
+          B.resetForViewer();
+          for (let i = 0; i < entries.length; i++) {
+            const e = entries[i];
+            prog.set(70 + (i / Math.max(1, entries.length)) * 25, `جاري تجهيز «${e.supName}»...`);
+            const payload = JSON.parse(await gunzipText(e.bytes, e.enc));
+            await B.importPayload(payload, { persist: false, renderDashboard: false });
+            await tick();
+          }
+          B.render();
+          viewer.versionId = info.versionId;
+          const total = entries.reduce((s, x) => s + (x.count || 0), 0);
+          if (info.empty) setChip("لم يتم نشر بيانات بعد", true);
+          else if (!entries.length) setChip("لا توجد بيانات ضمن نطاقك حالياً", true);
+          else setChip(`آخر تحديث: ${fmtDate(info.publishedAtMs)} — ${total} سيارة${info.period ? " — الفترة " + info.period : ""}${info.offline ? " (بدون اتصال)" : ""}`, !!info.offline);
+          if (initial && window.__authRemoveOverlay) window.__authRemoveOverlay();
+          if (!info.offline) watchLatest();
+          if (!initial) toast("✅ تم تحديث بياناتك", "success");
+        } catch (e) {
+          console.error("viewerLoad error:", e);
+          const msg = esc(e && e.message ? e.message : e);
+          if (initial && window.__authShowOverlay) {
+            window.__authShowOverlay(`<div style="max-width:420px;margin:110px auto;text-align:center;font-family:'Cairo',Arial,sans-serif;padding:0 20px;"><h2 style="color:#e5484d;">تعذر تحميل بياناتك</h2><p style="color:#666;font-size:14px;">${msg}</p><button id="__cloud_retry__" style="padding:12px 24px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:10px;font-weight:700;cursor:pointer;font-family:inherit;">إعادة المحاولة</button></div>`);
+            const r = $("__cloud_retry__");
+            if (r) r.onclick = () => { window.__authShowOverlay(window.__cloudLoadingHtml || ""); viewer.busy = false; viewerLoad({ initial: true }); };
+          } else {
+            toast("❌ تعذر تحديث البيانات: " + (e && e.message ? e.message : e), "error");
+          }
+        } finally {
+          prog.done();
+          viewer.busy = false;
+        }
+      }
+
+      // =====================================================================================
+      //  3) ربط الأحداث القادمة من بوابة الدخول
+      // =====================================================================================
+      async function pageReady() {
+        if (document.readyState === "loading") await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
+        await tick();
+        try { await window.__fleetStorageReady; } catch (e) { /* تجاهل */ }
+      }
+      let handled = false;
+      async function onUserReady(d) {
+        if (!d || handled) return;
+        handled = true;
+        await pageReady();
+        const u = d.userData || {};
+        if (d.isViewer) {
+          viewer.user = d.user; viewer.userData = u;
+          await viewerLoad({ initial: true });
+        } else if (u.isAdmin === true || u.role === "updater") {
+          canPublishHere = true;
+          addPublishButton();
+        }
+      }
+      window.addEventListener("cloud-user-ready", (ev) => onUserReady(ev.detail));
+      window.addEventListener("cloud-user-denied", (ev) => cacheClear(ev.detail && ev.detail.uid));
+      if (window.__cloudUser) onUserReady(window.__cloudUser);
+
+      // =====================================================================================
+      //  4) لوحة الأدمن: تبويب «نطاق البيانات» + تبويب «النشرات»
+      // =====================================================================================
+      window.__cloudAdminHook = function ({ modal, users }) {
+        const tabsBar = modal.querySelector(".ap-tabs");
+        if (!tabsBar) return;
+        const paneHost = $("__tab_permissions__").parentNode;
+        const basePanes = ["__tab_users__", "__tab_logs__", "__tab_chart__", "__tab_permissions__"];
+        const myPanes = ["__tab_cloudscope__", "__tab_cloudversions__"];
+
+        const mk = (label, tabKey, paneId) => {
+          const btn = document.createElement("button");
+          btn.className = "ap-tab"; btn.dataset.tab = tabKey; btn.textContent = label;
+          tabsBar.appendChild(btn);
+          const pane = document.createElement("div");
+          pane.id = paneId; pane.style.display = "none";
+          paneHost.appendChild(pane);
+          return { btn, pane };
+        };
+        const scopeT = mk("🗂️ نطاق البيانات", "cloudscope", "__tab_cloudscope__");
+        const verT = mk("📦 النشرات", "cloudversions", "__tab_cloudversions__");
+
+        const hideMine = () => myPanes.forEach((id) => { const p = $(id); if (p) p.style.display = "none"; });
+        modal.querySelectorAll(".ap-tab").forEach((t) => { if (t !== scopeT.btn && t !== verT.btn) t.addEventListener("click", hideMine); });
+        const activate = (t, loader) => {
+          t.btn.onclick = () => {
+            modal.querySelectorAll(".ap-tab").forEach((x) => x.classList.remove("active"));
+            t.btn.classList.add("active");
+            basePanes.forEach((id) => { const p = $(id); if (p) p.style.display = "none"; });
+            hideMine();
+            t.pane.style.display = "block";
+            loader();
+          };
+        };
+        activate(scopeT, () => renderScopeTab(scopeT.pane, users));
+        activate(verT, () => renderVersionsTab(verT.pane));
+      };
+
+      async function renderScopeTab(pane, users) {
+        pane.innerHTML = `<div class="ap-loading">جاري التحميل...</div>`;
+        let data = null;
+        try { data = await loadManifest(); }
+        catch (e) { pane.innerHTML = `<div class="cl-empty-note">تعذر قراءة آخر نسخة منشورة: ${esc(e && e.message ? e.message : e)}<br>تأكد من نشر قواعد Firestore الجديدة.</div>`; return; }
+        const sectors = data ? (data.manifest.sectors || []) : [];
+        const nameOfSector = {}; const nameOfGroup = {};
+        sectors.forEach((s) => { nameOfSector[s.sectorKey] = s.sectorName; (s.groups || []).forEach((g) => { nameOfGroup[g.id] = `${g.supName} ← ${s.sectorName}`; }); });
+
+        const summary = (u) => {
+          const sc = normScope(u.scope);
+          const parts = [];
+          if (sc.sectors.length) parts.push("قطاعات: " + sc.sectors.map((k) => nameOfSector[k] || "(غير موجود)").join("، "));
+          if (sc.groups.length) parts.push("مجموعات: " + sc.groups.map((k) => nameOfGroup[k] || "(غير موجودة)").join("، "));
+          return parts.length ? esc(parts.join(" | ")) : '<span style="color:#aaa;">—</span>';
+        };
+        const editor = (u) => {
+          const sc = normScope(u.scope);
+          const sectorBoxes = sectors.map((s) => `<label class="cl-chk"><input type="checkbox" data-kind="sector" data-key="${esc(s.sectorKey)}" ${sc.sectors.includes(s.sectorKey) ? "checked" : ""}> 🏢 ${esc(s.sectorName)} <small>(${s.count || 0} سيارة)</small></label>`).join("");
+          const groupBoxes = sectors.map((s) => `<div class="cl-sec"><b>${esc(s.sectorName)}</b><div class="cl-chk-grid">${(s.groups || []).map((g) => `<label class="cl-chk"><input type="checkbox" data-kind="group" data-key="${esc(g.id)}" ${sc.groups.includes(g.id) ? "checked" : ""}> 🧑‍💼 ${esc(g.supName)} <small>(${g.count || 0})</small></label>`).join("")}</div></div>`).join("");
+          const roleOpts = Object.keys(ROLE_LABELS).map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABELS[r]}</option>`).join("");
+          return `
+            <div class="cl-edit" data-uid="${esc(u.id)}">
+              <h4>الدور</h4>
+              <select class="ap-role-select cl-role">${roleOpts}</select>
+              <div class="cl-scope-area">
+                <h4>قطاعات كاملة (تشمل كل مشرفيها الحاليين والجدد) <button type="button" class="cl-mini cl-all-sectors">تحديد الكل</button><button type="button" class="cl-mini cl-none-sectors">إلغاء الكل</button></h4>
+                <div class="cl-chk-grid">${sectorBoxes || '<span style="color:#aaa;font-size:12px;">لا توجد قطاعات</span>'}</div>
+                <h4>مجموعات مشرفين محددة</h4>
+                ${groupBoxes || '<span style="color:#aaa;font-size:12px;">لا توجد مجموعات</span>'}
+              </div>
+              <button class="cl-save">💾 حفظ</button>
+            </div>`;
+        };
+
+        const head = data
+          ? `<div class="cl-pubbar"><span>آخر نسخة منشورة: <b>${esc(fmtDate(tsMs(data.latest.publishedAt)))}</b> — ${data.latest.vehicleCount || 0} سيارة / ${data.latest.groupCount || 0} مجموعة</span></div>`
+          : `<div class="cl-empty-note">لم يتم نشر أي نسخة بعد، فلا توجد قطاعات أو مجموعات لتحديدها. انشر أول نسخة من زر «📤 نشر التحديث» (أو من تبويب النشرات) ثم ارجع هنا.</div>`;
+
+        pane.innerHTML = `
+          <p style="font-size:12px;color:#8a8aa3;margin:0 0 12px;line-height:1.8;">
+            حدّد لكل مدير/مشرف دوره ونطاق البيانات اللي يشوفه. المدير يفتح على قطاعاته، والمشرف على مجموعاته، ولا يظهر له أي شيء خارج نطاقه (السيرفر هو اللي بيفرض ده).
+            فتح وغلق دخول الحساب نفسه من تبويب «المستخدمون».
+          </p>
+          ${head}
+          <input type="text" id="__cloud_scope_search__" class="ap-search" placeholder="ابحث بالإيميل أو الاسم...">
+          <div style="overflow:auto;max-height:52vh;">
+            <table><thead><tr><th>المستخدم</th><th>الدور</th><th>النطاق</th><th></th></tr></thead><tbody id="__cloud_scope_tbody__"></tbody></table>
+          </div>`;
+
+        const tbody = $("__cloud_scope_tbody__");
+        function draw(filter) {
+          const f = (filter || "").trim().toLowerCase();
+          const rows = users.filter((u) => !f || (u.email || "").toLowerCase().includes(f) || (u.nickname || "").toLowerCase().includes(f));
+          if (!rows.length) { tbody.innerHTML = `<tr><td colspan="4" class="ap-empty">لا يوجد نتائج</td></tr>`; return; }
+          tbody.innerHTML = rows.map((u) => u.isAdmin
+            ? `<tr><td>${esc(u.nickname || u.email)} <span class="ap-badge admin">أدمن</span><div style="font-size:11px;color:#8a8aa3;">${esc(u.email)}</div></td><td colspan="3" style="color:#8a8aa3;font-size:12px;">الأدمن يرى كل البيانات دائماً</td></tr>`
+            : `<tr>
+                <td>${esc(u.nickname || u.email)}${u.allowed ? "" : ' <span class="ap-badge no">مغلق</span>'}<div style="font-size:11px;color:#8a8aa3;">${esc(u.email)}</div></td>
+                <td>${esc(ROLE_LABELS[u.role] || u.role)}</td>
+                <td style="font-size:12px;max-width:340px;">${isViewerRole(u.role) ? summary(u) : '<span style="color:#aaa;">—</span>'}</td>
+                <td><button class="ap-detailsbtn cl-open" data-uid="${esc(u.id)}">⚙️ تعديل ▾</button></td>
+              </tr>
+              <tr class="ap-devrow" id="__cloud_edit_${esc(u.id)}" style="display:none;"><td colspan="4">${editor(u)}</td></tr>`).join("");
+
+          tbody.querySelectorAll(".cl-open").forEach((btn) => btn.addEventListener("click", () => {
+            const row = $("__cloud_edit_" + btn.dataset.uid);
+            if (row) row.style.display = row.style.display === "none" ? "table-row" : "none";
+          }));
+          tbody.querySelectorAll(".cl-edit").forEach((box) => {
+            const uid = box.dataset.uid;
+            const u = users.find((x) => x.id === uid);
+            const roleSel = box.querySelector(".cl-role");
+            const area = box.querySelector(".cl-scope-area");
+            const syncArea = () => { area.style.display = isViewerRole(roleSel.value) ? "block" : "none"; };
+            roleSel.addEventListener("change", syncArea); syncArea();
+            const setAll = (sel, v) => box.querySelectorAll(sel).forEach((c) => { c.checked = v; });
+            const bAll = box.querySelector(".cl-all-sectors"), bNone = box.querySelector(".cl-none-sectors");
+            if (bAll) bAll.addEventListener("click", () => setAll('input[data-kind="sector"]', true));
+            if (bNone) bNone.addEventListener("click", () => setAll('input[data-kind="sector"]', false));
+            box.querySelector(".cl-save").addEventListener("click", async (ev) => {
+              const btn = ev.target;
+              const role = roleSel.value;
+              const scope = {
+                sectors: [...box.querySelectorAll('input[data-kind="sector"]:checked')].map((c) => c.dataset.key),
+                groups: [...box.querySelectorAll('input[data-kind="group"]:checked')].map((c) => c.dataset.key)
+              };
+              if (isViewerRole(role) && !scope.sectors.length && !scope.groups.length) {
+                if (!confirm("لم تحدد أي قطاع أو مجموعة، فلن يرى هذا المستخدم أي بيانات. متابعة؟")) return;
+              }
+              const update = { role, scope: isViewerRole(role) ? scope : { sectors: [], groups: [] }, scopeUpdatedAt: serverTimestamp() };
+              // أول مرة يتحول لمدير/مشرف: نقفل تلقائياً "إضافة سيارة" و"استيراد نسخة" (تقدر ترجّعهم من تبويب الصلاحيات)
+              if (isViewerRole(role) && !isViewerRole(u.role)) update.permissions = Object.assign({}, u.permissions, { addCar: false, importVersion: false });
+              btn.disabled = true;
+              try {
+                await updateDoc(doc(db, "users", uid), update);
+                u.role = role; u.scope = update.scope;
+                if (update.permissions) u.permissions = update.permissions;
+                draw($("__cloud_scope_search__").value);
+                const row = $("__cloud_edit_" + uid); if (row) row.style.display = "table-row";
+              } catch (err) {
+                console.error("save scope error:", err);
+                alert("تعذّر حفظ الدور/النطاق — تأكد من نشر قواعد Firestore الجديدة");
+                btn.disabled = false;
+              }
+            });
+          });
+        }
+        draw("");
+        $("__cloud_scope_search__").addEventListener("input", (e) => draw(e.target.value));
+      }
+
+      async function renderVersionsTab(pane) {
+        pane.innerHTML = `<div class="ap-loading">جاري التحميل...</div>`;
+        let latest = null, versions = [];
+        try {
+          const l = await getDoc(doc(db, "meta", "latest"));
+          latest = l.exists() ? l.data() : null;
+          const snap = await getDocs(query(collection(db, "snapshots"), orderBy("createdAt", "desc"), limit(30)));
+          versions = snap.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+        } catch (e) {
+          pane.innerHTML = `<div class="cl-empty-note">تعذر قراءة النشرات: ${esc(e && e.message ? e.message : e)}<br>تأكد من نشر قواعد Firestore الجديدة.</div>`;
+          return;
+        }
+        const rows = versions.map((v) => {
+          const cur = latest && latest.versionId === v.id;
+          const incomplete = v.status === "uploading";
+          return `<tr>
+            <td>${esc(fmtDate(tsMs(v.createdAt)))}${cur ? ' <span class="ap-badge ok">الحالية</span>' : ""}${incomplete ? ' <span class="ap-badge no">نشر غير مكتمل</span>' : ""}<div style="font-size:11px;color:#8a8aa3;">${esc(v.id)}</div></td>
+            <td style="font-size:12px;">${esc(v.createdBy || "-")}</td>
+            <td style="font-size:12px;">${esc(fmtPeriod(v.periodFrom, v.periodTo)) || "-"}</td>
+            <td>${v.vehicleCount || 0} / ${v.groupCount || 0}</td>
+            <td>${fmtBytes(v.bytes || 0)}</td>
+            <td>${cur ? "" : `${incomplete ? "" : `<button class="cl-mini cl-use" data-id="${esc(v.id)}">اعتماد هذه النسخة</button>`}<button class="cl-mini danger cl-del" data-id="${esc(v.id)}">🗑️</button>`}</td>
+          </tr>`;
+        }).join("");
+        pane.innerHTML = `
+          <div class="cl-pubbar">
+            <span>${latest ? `النسخة المعتمدة: <b>${esc(fmtDate(tsMs(latest.publishedAt)))}</b> — بواسطة ${esc(latest.publishedBy || "-")}` : "لم يتم نشر أي نسخة بعد"}</span>
+            <button class="cl-save" id="__cloud_pub_now__" style="margin:0;">📤 نشر البيانات الحالية</button>
+          </div>
+          <p style="font-size:12px;color:#8a8aa3;margin:0 0 10px;line-height:1.8;">يتم الاحتفاظ بآخر ${KEEP_VERSIONS} نسخ فقط. «اعتماد هذه النسخة» بيرجّع الجميع لتلك النسخة فوراً (مفيد لو حصل خطأ في آخر تحديث).</p>
+          <div style="overflow:auto;max-height:50vh;">
+            <table><thead><tr><th>تاريخ النشر</th><th>بواسطة</th><th>فترة البيانات</th><th>سيارات / مجموعات</th><th>الحجم</th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="6" class="ap-empty">لا توجد نشرات</td></tr>'}</tbody></table>
+          </div>`;
+
+        $("__cloud_pub_now__").onclick = async () => { const ok = await publish(); if (ok) renderVersionsTab(pane); };
+        pane.querySelectorAll(".cl-use").forEach((b) => b.addEventListener("click", async () => {
+          const v = versions.find((x) => x.id === b.dataset.id);
+          if (!v || v.status === "uploading" || !confirm("سيتم اعتماد هذه النسخة لجميع المديرين والمشرفين. متابعة؟")) return;
+          b.disabled = true;
+          try {
+            await setDoc(doc(db, "meta", "latest"), { versionId: v.id, publishedAt: serverTimestamp(), publishedBy: (auth.currentUser && auth.currentUser.email) || "", vehicleCount: v.vehicleCount || 0, groupCount: v.groupCount || 0, bytes: v.bytes || 0, periodFrom: v.periodFrom || null, periodTo: v.periodTo || null, rollback: true });
+            renderVersionsTab(pane);
+          } catch (e) { alert("تعذّر اعتماد النسخة: " + (e && e.message ? e.message : e)); b.disabled = false; }
+        }));
+        pane.querySelectorAll(".cl-del").forEach((b) => b.addEventListener("click", async () => {
+          if (!confirm("حذف هذه النسخة نهائياً؟")) return;
+          b.disabled = true;
+          try { await deleteVersion(b.dataset.id); renderVersionsTab(pane); }
+          catch (e) { alert("تعذّر الحذف: " + (e && e.message ? e.message : e)); b.disabled = false; }
+        }));
+      }
     </script>
 
 
